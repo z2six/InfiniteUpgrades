@@ -1,5 +1,5 @@
 {
-  "itemGroup.infiniteupgrades": "Example Mod Tab",
-  "block.infiniteupgrades.example_block": "Example Block",
-  "item.infiniteupgrades.example_item": "Example Item"
+  "itemGroup.infiniteupgrades": "Infinite Upgrades",
+  "block.infiniteupgrades.celestial_sigil": "Celestial Sigil",
+  "item.infiniteupgrades.celestial_sigil": "Celestial Sigil"
 }
