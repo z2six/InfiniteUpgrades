@@ -3,10 +3,10 @@ package org.z2six.infiniteupgrades.world.blockentity;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
@@ -38,26 +38,28 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
         return inventory;
     }
 
-    // ---- Persistence ----
+    // ---- Persistence (1.21: include HolderLookup.Provider) ----
 
     @Override
-    protected void saveAdditional(CompoundTag tag) {
-        super.saveAdditional(tag);
+    protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
+        super.saveAdditional(tag, provider);
         try {
-            ContainerHelper.saveAllItems(tag, inventory.getItems());
+            // 1.21 signature requires provider
+            ContainerHelper.saveAllItems(tag, inventory.getItems(), provider);
         } catch (Throwable t) {
             LOG.error("[SigilBE] saveAdditional failed: {}", t.toString());
         }
     }
 
     @Override
-    public void load(CompoundTag tag) {
-        super.load(tag);
+    protected void loadAdditional(CompoundTag tag, HolderLookup.Provider provider) {
+        super.loadAdditional(tag, provider);
         try {
             inventory.clearContent();
-            ContainerHelper.loadAllItems(tag, inventory.getItems());
+            // 1.21 signature requires provider
+            ContainerHelper.loadAllItems(tag, inventory.getItems(), provider);
         } catch (Throwable t) {
-            LOG.error("[SigilBE] load failed: {}", t.toString());
+            LOG.error("[SigilBE] loadAdditional failed: {}", t.toString());
         }
     }
 

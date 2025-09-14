@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/world/AngelEntity.java
+// File: src/main/java/org/z2six/infiniteupgrades/world/AngelEntity.java
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
@@ -9,6 +9,7 @@ import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -26,9 +27,10 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.world.menu.AngelMenu;
+import org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity;
 
 public class AngelEntity extends Mob {
     private static final Logger LOG = LogUtils.getLogger();
@@ -102,11 +104,7 @@ public class AngelEntity extends Mob {
     // --- Interaction/collision flags ---
     @Override public boolean isPushable() { return false; }
     @Override protected void pushEntities() {}
-
-    // IMPORTANT: allow picking so right-click can target the entity
-    @Override public boolean isPickable() { return true; }
-
-    // Keep it invulnerable / non-attackable
+    @Override public boolean isPickable() { return true; } // allow clicking entity
     @Override public boolean isAttackable() { return false; }
     @Override public boolean canBeAffected(MobEffectInstance effect) { return false; }
     @Override public boolean hurt(DamageSource source, float amount) { return false; }
@@ -118,7 +116,12 @@ public class AngelEntity extends Mob {
 
         if (level().isClientSide) {
             try {
-                Player p = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 128.0, false);
+                // Avoid deprecated overload; use predicate version (1.21-safe)
+                Player p = this.level().getNearestPlayer(
+                        this.getX(), this.getY(), this.getZ(),
+                        128.0,
+                        player -> !player.isSpectator()
+                );
                 if (p != null) {
                     double dx = p.getX() - this.getX();
                     double dz = p.getZ() - this.getZ();
@@ -158,18 +161,16 @@ public class AngelEntity extends Mob {
                 return super.mobInteract(player, hand);
             }
             if (!level().isClientSide) {
-                // Open our vanilla-style menu
-                player.openMenu(new net.minecraft.world.MenuProvider() {
-                    @Override public Component getDisplayName() {
-                        return Component.translatable("gui.infiniteupgrades.angel");
-                    }
-                    @Override public AbstractContainerMenu createMenu(int id, Inventory inv, Player p) {
-                        return new org.z2six.infiniteupgrades.world.menu.AngelMenu(id, inv);
-                    }
-                });
-                return InteractionResult.CONSUME; // server handled it
+                BlockPos anchor = getAnchor();
+                BlockEntity be = level().getBlockEntity(anchor);
+                if (be instanceof SigilBlockEntity sigil) {
+                    ((ServerPlayer)player).openMenu(sigil, anchor);
+                    return InteractionResult.CONSUME;
+                } else {
+                    LOG.warn("[AngelEntity] No SigilBlockEntity at {}", anchor);
+                }
             }
-            return InteractionResult.SUCCESS; // client: show hand swing, etc.
+            return InteractionResult.SUCCESS;
         } catch (Throwable t) {
             LOG.error("[AngelEntity] mobInteract failed: {}", t.toString());
             return InteractionResult.PASS;

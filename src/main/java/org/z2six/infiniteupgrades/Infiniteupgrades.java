@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
+// File: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
 package org.z2six.infiniteupgrades;
 
 import com.mojang.logging.LogUtils;
@@ -32,6 +32,7 @@ import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.screen.AngelScreen;
+import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 import org.z2six.infiniteupgrades.world.AngelEntity;
@@ -47,7 +48,6 @@ public class Infiniteupgrades {
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
-    // --- Template/example content (safe to keep/remove later) ---
     public static final DeferredBlock<Block> EXAMPLE_BLOCK =
             BLOCKS.registerSimpleBlock("example_block", BlockBehaviour.Properties.of().mapColor(MapColor.STONE));
     public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM =
@@ -64,7 +64,7 @@ public class Infiniteupgrades {
                             .displayItems((parameters, output) -> output.accept(EXAMPLE_ITEM.get()))
                             .build());
 
-    // --- Our Sigil ---
+    // Our Sigil
     public static final DeferredBlock<Block> CELESTIAL_SIGIL = BLOCKS.register(
             "celestial_sigil",
             () -> new SigilBlock(BlockBehaviour.Properties.of()
@@ -77,18 +77,19 @@ public class Infiniteupgrades {
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
 
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
-        // listeners
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerEntityAttributes);
 
-        // registries
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
-        ModMenus.MENUS.register(modEventBus);
-        ModEntityTypes.ENTITY_TYPES.register(modEventBus); // <-- bind our entity types
 
-        // other buses/config
+        // NEW: block entities
+        ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
+
+        ModMenus.MENUS.register(modEventBus);
+        ModEntityTypes.ENTITY_TYPES.register(modEventBus);
+
         NeoForge.EVENT_BUS.register(this);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
 
@@ -107,7 +108,6 @@ public class Infiniteupgrades {
         }
     }
 
-    // bind attributes for our custom entity
     private void registerEntityAttributes(final EntityAttributeCreationEvent evt) {
         evt.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
     }
