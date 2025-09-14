@@ -4,35 +4,39 @@ package org.z2six.infiniteupgrades.world;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.world.menu.AngelMenu;
 
 public class AngelEntity extends Mob {
     private static final Logger LOG = LogUtils.getLogger();
 
     private static final EntityDataAccessor<BlockPos> ANCHOR_POS =
             SynchedEntityData.defineId(AngelEntity.class, EntityDataSerializers.BLOCK_POS);
-
-    // Render-only bob amplitude (server stores base Y; bob applied client-side in renderer)
-    public static final float BOB_AMPLITUDE = 0.15f;
-    public static final float BOB_SPEED = 0.05f;
+    private static final EntityDataAccessor<String> ANIM =
+            SynchedEntityData.defineId(AngelEntity.class, EntityDataSerializers.STRING);
 
     public AngelEntity(EntityType<? extends Mob> type, Level level) {
         super(type, level);
@@ -42,7 +46,6 @@ public class AngelEntity extends Mob {
         setPersistenceRequired();
         setInvulnerable(true);
 
-        // Attributes might not be attached yet during construction; guard against nulls.
         try {
             AttributeInstance kb = getAttribute(Attributes.KNOCKBACK_RESISTANCE);
             if (kb != null) kb.setBaseValue(1.0);
@@ -59,7 +62,6 @@ public class AngelEntity extends Mob {
         LOG.debug("[AngelEntity] Constructed; side={}, id={}", level.isClientSide ? "CLIENT" : "SERVER", getId());
     }
 
-    // Minimal attributes so the game is happy
     public static AttributeSupplier.Builder createAttributes() {
         return Mob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 40.0)
@@ -71,64 +73,76 @@ public class AngelEntity extends Mob {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         super.defineSynchedData(builder);
         builder.define(ANCHOR_POS, BlockPos.ZERO);
+        builder.define(ANIM, "idle");
     }
 
-    // Anchor API
+    public String getAnimation() {
+        try { return this.entityData.get(ANIM); }
+        catch (Throwable t) { LOG.error("[AngelEntity] getAnimation failed: {}", t.toString()); return "idle"; }
+    }
+    public void setAnimation(String key) {
+        try { this.entityData.set(ANIM, (key == null || key.isEmpty()) ? "idle" : key); }
+        catch (Throwable t) { LOG.error("[AngelEntity] setAnimation failed: {}", t.toString()); }
+    }
+
     public void setAnchor(BlockPos pos) {
         try {
             this.entityData.set(ANCHOR_POS, pos.immutable());
-            // Snap position once; renderer handles bobbing visually
-            this.setPos(pos.getX() + 0.5, pos.getY() + 1.6, pos.getZ() + 0.5);
-            LOG.debug("[AngelEntity] Anchor set to {} ; snapped position", pos);
+            this.setPos(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+            LOG.debug("[AngelEntity] Anchor set {}; snapped to ground", pos);
         } catch (Throwable t) {
             LOG.error("[AngelEntity] setAnchor failed: {}", t.toString());
         }
     }
-
     public BlockPos getAnchor() {
-        return this.entityData.get(ANCHOR_POS);
+        try { return this.entityData.get(ANCHOR_POS); }
+        catch (Throwable t) { LOG.error("[AngelEntity] getAnchor failed: {}", t.toString()); return BlockPos.ZERO; }
     }
 
-    // Make this a statue: no pushes/collisions/attacks/effects
+    // --- Interaction/collision flags ---
     @Override public boolean isPushable() { return false; }
     @Override protected void pushEntities() {}
-    @Override public boolean canBeCollidedWith() { return false; }
-    @Override public boolean isPickable() { return false; } // can't be targeted by projectiles
 
-    @Override
-    public boolean canBeAffected(MobEffectInstance effect) {
-        return false;
-    }
+    // IMPORTANT: allow picking so right-click can target the entity
+    @Override public boolean isPickable() { return true; }
 
-    @Override
-    public boolean hurt(DamageSource source, float amount) {
-        // Ignore all damage
-        return false;
-    }
+    // Keep it invulnerable / non-attackable
+    @Override public boolean isAttackable() { return false; }
+    @Override public boolean canBeAffected(MobEffectInstance effect) { return false; }
+    @Override public boolean hurt(DamageSource source, float amount) { return false; }
 
     @Override
     public void tick() {
-        // Minimal ticking: no AI/movement, just base tick + occasional anchor check.
         super.baseTick();
-
-        // Keep frozen: zero motion
         this.setDeltaMovement(0, 0, 0);
 
-        if (!level().isClientSide) {
+        if (level().isClientSide) {
             try {
-                // Ensure we stay glued to the anchor; cheap check every ~1s
+                Player p = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 128.0, false);
+                if (p != null) {
+                    double dx = p.getX() - this.getX();
+                    double dz = p.getZ() - this.getZ();
+                    float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+                    this.setYRot(yaw);
+                    this.setYHeadRot(yaw);
+                    this.setYBodyRot(yaw);
+                }
+            } catch (Throwable t) {
+                LOG.error("[AngelEntity] Client yaw update failed: {}", t.toString());
+            }
+        } else {
+            try {
                 if (this.tickCount % 20 == 0) {
                     BlockPos anchor = getAnchor();
                     if (anchor == null || anchor == BlockPos.ZERO) return;
                     BlockState bs = ((ServerLevel) level()).getBlockState(anchor);
                     Block block = bs.getBlock();
                     if (!(block instanceof SigilBlock)) {
-                        LOG.debug("[AngelEntity] Anchor block missing at {}; discarding", anchor);
+                        LOG.debug("[AngelEntity] Anchor missing at {}; discarding", anchor);
                         this.discard();
                         return;
                     }
-                    // Snap precisely to anchor (no drift)
-                    this.setPos(anchor.getX() + 0.5, anchor.getY() + 1.6, anchor.getZ() + 0.5);
+                    this.setPos(anchor.getX() + 0.5, anchor.getY(), anchor.getZ() + 0.5);
                 }
             } catch (Throwable t) {
                 LOG.error("[AngelEntity] Server tick error: {}", t.toString());
@@ -136,47 +150,54 @@ public class AngelEntity extends Mob {
         }
     }
 
-    // Interactions: Name Tag works; future GUI goes here.
     @Override
     protected InteractionResult mobInteract(Player player, InteractionHand hand) {
         try {
             ItemStack held = player.getItemInHand(hand);
             if (held.is(Items.NAME_TAG)) {
-                // Vanilla name tag behavior
                 return super.mobInteract(player, hand);
             }
-            // Future: open GUI here (server-side)
-            // if (!level().isClientSide) openAngelMenu(player);
-            return InteractionResult.sidedSuccess(level().isClientSide);
+            if (!level().isClientSide) {
+                // Open our vanilla-style menu
+                player.openMenu(new net.minecraft.world.MenuProvider() {
+                    @Override public Component getDisplayName() {
+                        return Component.translatable("gui.infiniteupgrades.angel");
+                    }
+                    @Override public AbstractContainerMenu createMenu(int id, Inventory inv, Player p) {
+                        return new org.z2six.infiniteupgrades.world.menu.AngelMenu(id, inv);
+                    }
+                });
+                return InteractionResult.CONSUME; // server handled it
+            }
+            return InteractionResult.SUCCESS; // client: show hand swing, etc.
         } catch (Throwable t) {
             LOG.error("[AngelEntity] mobInteract failed: {}", t.toString());
             return InteractionResult.PASS;
         }
     }
 
-    // Save/load anchor so entity persists across restarts
     @Override
     public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
-        BlockPos p = getAnchor();
-        tag.putInt("ax", p.getX());
-        tag.putInt("ay", p.getY());
-        tag.putInt("az", p.getZ());
+        try {
+            BlockPos p = getAnchor();
+            tag.putInt("ax", p.getX());
+            tag.putInt("ay", p.getY());
+            tag.putInt("az", p.getZ());
+            tag.putString("anim", getAnimation());
+        } catch (Throwable t) {
+            LOG.error("[AngelEntity] addAdditionalSaveData failed: {}", t.toString());
+        }
     }
 
     @Override
     public void readAdditionalSaveData(CompoundTag tag) {
         super.readAdditionalSaveData(tag);
         try {
-            BlockPos p = new BlockPos(tag.getInt("ax"), tag.getInt("ay"), tag.getInt("az"));
-            setAnchor(p);
+            setAnchor(new BlockPos(tag.getInt("ax"), tag.getInt("ay"), tag.getInt("az")));
+            if (tag.contains("anim")) setAnimation(tag.getString("anim"));
         } catch (Throwable t) {
             LOG.error("[AngelEntity] readAdditionalSaveData failed: {}", t.toString());
         }
     }
-
-    // Prevent random rotations / body yaw changes from the engine
-    @Override public void setYRot(float yRot) { /* ignore engine-driven rotation */ }
-    @Override public void setYBodyRot(float yBodyRot) { /* ignore */ }
-    @Override public void setYHeadRot(float yHeadRot) { /* ignore */ }
 }

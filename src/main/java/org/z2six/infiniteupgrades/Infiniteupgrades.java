@@ -4,9 +4,12 @@ package org.z2six.infiniteupgrades;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
@@ -17,16 +20,20 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
-import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
+import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.client.screen.AngelScreen;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
+import org.z2six.infiniteupgrades.registry.ModMenus;
 import org.z2six.infiniteupgrades.world.AngelEntity;
 import org.z2six.infiniteupgrades.world.SigilBlock;
 
@@ -36,76 +43,96 @@ public class Infiniteupgrades {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
-    public static final DeferredRegister.Items  ITEMS  = DeferredRegister.createItems(MODID);
-    public static final DeferredRegister<CreativeModeTab> TABS =
+    public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
+    public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
-    // Register entity types
-    static {
-        // static init just to ensure the class is loaded
-    }
+    // --- Template/example content (safe to keep/remove later) ---
+    public static final DeferredBlock<Block> EXAMPLE_BLOCK =
+            BLOCKS.registerSimpleBlock("example_block", BlockBehaviour.Properties.of().mapColor(MapColor.STONE));
+    public static final DeferredItem<BlockItem> EXAMPLE_BLOCK_ITEM =
+            ITEMS.registerSimpleBlockItem("example_block", EXAMPLE_BLOCK);
+    public static final DeferredItem<Item> EXAMPLE_ITEM =
+            ITEMS.registerSimpleItem("example_item",
+                    new Item.Properties().food(new FoodProperties.Builder().alwaysEdible().nutrition(1).saturationModifier(2f).build()));
+    public static final DeferredHolder<CreativeModeTab, CreativeModeTab> EXAMPLE_TAB =
+            CREATIVE_MODE_TABS.register("example_tab",
+                    () -> CreativeModeTab.builder()
+                            .title(Component.translatable("itemGroup.infiniteupgrades"))
+                            .withTabsBefore(CreativeModeTabs.COMBAT)
+                            .icon(() -> EXAMPLE_ITEM.get().getDefaultInstance())
+                            .displayItems((parameters, output) -> output.accept(EXAMPLE_ITEM.get()))
+                            .build());
 
-    // Sigil block + item
+    // --- Our Sigil ---
     public static final DeferredBlock<Block> CELESTIAL_SIGIL = BLOCKS.register(
             "celestial_sigil",
             () -> new SigilBlock(BlockBehaviour.Properties.of()
                     .mapColor(MapColor.GOLD)
                     .noCollission()
                     .noOcclusion()
-                    .strength(0.1f))
-    );
+                    .strength(0.1f)));
+
     public static final DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
 
-    public Infiniteupgrades(IEventBus modBus, ModContainer modContainer) {
-        // Core registers
-        BLOCKS.register(modBus);
-        ITEMS.register(modBus);
-        TABS.register(modBus);
-        ModEntityTypes.ENTITY_TYPES.register(modBus);
+    public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
+        // listeners
+        modEventBus.addListener(this::addCreative);
+        modEventBus.addListener(this::registerEntityAttributes);
 
-        // Events
-        modBus.addListener(this::commonSetup);
-        modBus.addListener(this::attributes);
-        modBus.addListener(this::addCreative);
+        // registries
+        BLOCKS.register(modEventBus);
+        ITEMS.register(modEventBus);
+        CREATIVE_MODE_TABS.register(modEventBus);
+        ModMenus.MENUS.register(modEventBus);
+        ModEntityTypes.ENTITY_TYPES.register(modEventBus); // <-- bind our entity types
 
+        // other buses/config
         NeoForge.EVENT_BUS.register(this);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
 
-        LOGGER.debug("[InfiniteUpgrades] Boot OK; registers wired");
+        LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
-    private void commonSetup(final FMLCommonSetupEvent e) {
-        LOGGER.info("[InfiniteUpgrades] Common setup");
-    }
-
-    private void attributes(final EntityAttributeCreationEvent e) {
+    private void addCreative(BuildCreativeModeTabContentsEvent event) {
         try {
-            e.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
-            LOGGER.debug("[InfiniteUpgrades] Registered AngelEntity attributes");
+            if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
+                event.accept(EXAMPLE_BLOCK_ITEM);
+                event.accept(CELESTIAL_SIGIL_ITEM);
+                LOGGER.debug("[Infiniteupgrades] Added items to BUILDING_BLOCKS tab");
+            }
         } catch (Throwable t) {
-            LOGGER.error("[InfiniteUpgrades] Attribute registration failed: {}", t.toString());
+            LOGGER.error("[Infiniteupgrades] Failed to add items to creative tab", t);
         }
     }
 
-    private void addCreative(BuildCreativeModeTabContentsEvent e) {
-        if (e.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
-            e.accept(CELESTIAL_SIGIL_ITEM);
-            LOGGER.debug("[InfiniteUpgrades] Added Celestial Sigil to BUILDING_BLOCKS");
-        }
+    // bind attributes for our custom entity
+    private void registerEntityAttributes(final EntityAttributeCreationEvent evt) {
+        evt.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
     }
 
     @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent e) {
-        LOGGER.info("[InfiniteUpgrades] Server starting");
+    public void onServerStarting(ServerStartingEvent event) {
+        LOGGER.info("[Infiniteupgrades] Server starting");
     }
 
+    // ---- CLIENT ----
     @EventBusSubscriber(modid = MODID, value = Dist.CLIENT)
     public static class Client {
         @SubscribeEvent
-        public static void pingClientSetup(net.neoforged.fml.event.lifecycle.FMLClientSetupEvent e) {
-            // just a friendly log so we know client side is alive
-            LogUtils.getLogger().info("[InfiniteUpgrades] Client setup; user={}", Minecraft.getInstance().getUser().getName());
+        public static void clientSetup(FMLClientSetupEvent evt) {
+            LOGGER.info("[InfiniteUpgrades] Client setup; user={}", Minecraft.getInstance().getUser().getName());
+        }
+
+        @SubscribeEvent
+        public static void registerScreens(RegisterMenuScreensEvent evt) {
+            try {
+                evt.register(ModMenus.ANGEL_MENU.get(), AngelScreen::new);
+                LOGGER.debug("[InfiniteUpgrades] Registered AngelScreen");
+            } catch (Throwable t) {
+                LOGGER.error("[InfiniteUpgrades] Failed to register AngelScreen", t);
+            }
         }
     }
 }
