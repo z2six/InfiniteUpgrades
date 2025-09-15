@@ -1,10 +1,8 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelMenu.java
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.FriendlyByteBuf;
@@ -26,15 +24,21 @@ import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Config;
 import org.z2six.infiniteupgrades.registry.ModMenus;
-import org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity;
 
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Angel menu with client-only preview in output slot (index 2).
+ * - Slot 0: weapon/armor (filtered by combat attributes/classes)
+ * - Slot 1: resource (iron ingot for now)
+ * - Slot 2: PREVIEW ONLY (cannot be taken)
+ */
 public class AngelMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
 
+    // Consider these as "combat attributes" for filtering & scaling
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
             Attributes.ATTACK_DAMAGE,
             Attributes.ATTACK_SPEED,
@@ -43,52 +47,39 @@ public class AngelMenu extends AbstractContainerMenu {
             Attributes.KNOCKBACK_RESISTANCE
     );
 
+    // Detect trailing " +N" in a name (space-plus-number at end)
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
-    private final Inventory playerInv;
-    private final SigilBlockEntity sigil;            // may be null only in fallback ctor
-    private final Container beInv;                   // be inventory: 0=item, 1=resource
-    private final SimpleContainer ghostOut = new SimpleContainer(1); // slot 2 preview only
+    // Reentrancy guard: prevent preview writes from recalling slotsChanged -> updatePreview -> ...
     private boolean suppressPreviewUpdate = false;
+
+    // Backing inventory (3 slots) – invokes slotsChanged on edits
+    private final Container baseInv = new SimpleContainer(3) {
+        @Override public void setChanged() {
+            super.setChanged();
+            // Skip callback while we are programmatically writing the ghost preview
+            if (suppressPreviewUpdate) return;
+            try { AngelMenu.this.slotsChanged(this); }
+            catch (Throwable t) { LOG.error("[AngelMenu] slotsChanged dispatch failed: {}", t.toString()); }
+        }
+    };
+
+    // Cached preview chance (permille). Client-only display for now.
     private int previewChancePermille = 0;
 
-    // Normal path: from BE
-    public AngelMenu(int id, Inventory inv, SigilBlockEntity sigil) {
-        super(ModMenus.ANGEL_MENU.get(), id);
-        this.playerInv = inv;
-        this.sigil = sigil;
-        this.beInv = sigil.getInventory();
-        setupSlots();
-        updatePreview();
-    }
-
-    // Fallback (shouldn’t be used in practice; keeps old behavior if buffer missing)
     public AngelMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
-        this.playerInv = inv;
-        this.sigil = null;
-        this.beInv = new SimpleContainer(2); // ephemeral
-        setupSlots();
-        updatePreview();
-    }
-
-    // Buffer ctor retained for compatibility; not used since we read BE in ModMenus
-    public AngelMenu(int id, Inventory inv, FriendlyByteBuf buf) {
-        this(id, inv);
-    }
-
-    private void setupSlots() {
         try {
-            // Inputs (BE-backed)
-            this.addSlot(new Slot(beInv, 0, 44, 35) {
+            // Inputs
+            this.addSlot(new Slot(baseInv, 0, 44, 35) {
                 @Override public boolean mayPlace(ItemStack stack) { return isCombatItem(stack); }
             });
-            this.addSlot(new Slot(beInv, 1, 62, 35) {
+            this.addSlot(new Slot(baseInv, 1, 62, 35) {
                 @Override public boolean mayPlace(ItemStack stack) { return stack.is(Items.IRON_INGOT); }
             });
 
-            // Output (ghost)
-            this.addSlot(new Slot(ghostOut, 0, 120, 35) {
+            // Output (preview) – cannot pick up
+            this.addSlot(new Slot(baseInv, 2, 120, 35) {
                 @Override public boolean mayPlace(ItemStack stack) { return false; }
                 @Override public boolean mayPickup(Player player) { return false; }
             });
@@ -97,40 +88,45 @@ public class AngelMenu extends AbstractContainerMenu {
             int startY = 84;
             for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 9; ++col) {
-                    this.addSlot(new Slot(playerInv, col + row * 9 + 9, 8 + col * 18, startY + row * 18));
+                    this.addSlot(new Slot(inv, col + row * 9 + 9, 8 + col * 18, startY + row * 18));
                 }
             }
             for (int col = 0; col < 9; ++col) {
-                this.addSlot(new Slot(playerInv, col, 8 + col * 18, startY + 58));
+                this.addSlot(new Slot(inv, col, 8 + col * 18, startY + 58));
             }
+
+            // Initial preview
+            updatePreview();
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] setupSlots failed: {}", t.toString());
+            LOG.error("[AngelMenu] ctor failed: {}", t.toString());
         }
     }
 
-    // Distance/validity: 8 blocks radius around the sigil (if present), else always valid
+    public AngelMenu(int id, Inventory inv, FriendlyByteBuf buf) {
+        this(id, inv);
+    }
+
     @Override
     public boolean stillValid(Player player) {
-        if (sigil == null) return true;
-        BlockPos pos = sigil.getBlockPos();
-        return player.distanceToSqr(
-                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5
-        ) <= 64.0;
+        return true; // stateless for now
     }
 
     @Override
     public void slotsChanged(Container container) {
         super.slotsChanged(container);
         updatePreview();
-        // Ensure BE persistence on server if the inputs changed
-        if (sigil != null && !playerInv.player.level().isClientSide) {
-            sigil.setChanged();
-        }
     }
 
+    /** Public accessor for the screen HUD text. */
     public int getPreviewChancePermille() { return previewChancePermille; }
 
-    // --- Shift-click rules (only between player inv and beInv) ---
+    /** Called by the client screen when it detects inputs changed locally; recomputes the ghost output. */
+    public void clientRecomputePreview() {
+        updatePreview();
+    }
+
+    // ---- Shift-click rules ---------------------------------------------------------------------
+
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
         try {
@@ -141,11 +137,11 @@ public class AngelMenu extends AbstractContainerMenu {
             ItemStack stack = slot.getItem();
             ItemStack copy = stack.copy();
 
-            // Indexes: 0=item (be), 1=ingot (be), 2=ghost, 3.. = player
-            if (index == 2) return ItemStack.EMPTY; // ghost
+            // Output is ghost; never move
+            if (index == 2) return ItemStack.EMPTY;
 
+            // From player inventory -> inputs
             if (index >= 3) {
-                // From player -> BE inputs
                 if (isCombatItem(stack)) {
                     if (!this.moveItemStackTo(stack, 0, 1, false)) return ItemStack.EMPTY;
                 } else if (stack.is(Items.IRON_INGOT)) {
@@ -154,7 +150,7 @@ public class AngelMenu extends AbstractContainerMenu {
                     return ItemStack.EMPTY;
                 }
             } else {
-                // From BE inputs -> player
+                // From inputs -> back to player inventory
                 if (!this.moveItemStackTo(stack, 3, 39, false)) return ItemStack.EMPTY;
             }
 
@@ -170,62 +166,72 @@ public class AngelMenu extends AbstractContainerMenu {
         }
     }
 
-    // ---- Preview (client-only ghost) ----
+    // ---- Preview logic (client-safe, no server mutation) ---------------------------------------
 
+    /** Update preview item (slot 2) and cached chance text. */
     private void updatePreview() {
         try {
-            ItemStack in = beInv.getItem(0);
-            ItemStack res = beInv.getItem(1);
+            ItemStack in = baseInv.getItem(0);
+            ItemStack res = baseInv.getItem(1);
 
+            // Requirements: valid combat item + at least 1 iron ingot
             if (in.isEmpty() || !isCombatItem(in) || res.isEmpty() || !res.is(Items.IRON_INGOT)) {
                 withPreviewSuppressed(() -> {
-                    ghostOut.setItem(0, ItemStack.EMPTY);
+                    baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
                 });
                 return;
             }
 
+            // Determine current level from name (… +N). If none, treat as 0.
             Pair<Component, Integer> baseAndLevel = parseBaseNameAndLevel(in.getHoverName());
             int currentLevel = baseAndLevel.getSecond();
             int nextLevel = currentLevel + 1;
 
+            // Respect max level from config
             if (nextLevel > Config.TUNING.maxLevel) {
                 withPreviewSuppressed(() -> {
-                    ghostOut.setItem(0, ItemStack.EMPTY);
+                    baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
                 });
                 return;
             }
 
+            // Chance for current -> next
             double chance = Config.TUNING.chanceForNextLevel(currentLevel);
             previewChancePermille = (int)Math.round(chance * 1000.0);
 
+            // Scale factor for THIS increment (not total)
             double step = Config.TUNING.percentBonusForLevelUp(currentLevel);
             double factor = 1.0 + step;
 
+            // Build preview: clone input, rewrite name to "Base +next", scale combat modifiers
             ItemStack preview = in.copy();
 
-            // Name: Base +N
+            // Name: Base +N (strip any existing suffix first)
             Component pretty = Component.literal(stripPlusSuffix(in.getHoverName().getString()))
                     .append(Component.literal(" +" + nextLevel).withStyle(ChatFormatting.AQUA));
             preview.set(DataComponents.CUSTOM_NAME, pretty);
 
-            // Scale attribute component
+            // Attributes: read current modifiers then multiply combat amounts by factor
             ItemAttributeModifiers cur = preview.getAttributeModifiers();
             ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
 
             for (Entry e : cur.modifiers()) {
                 Holder<Attribute> attr = e.attribute();
                 AttributeModifier mod = e.modifier();
+                // Keep non-combat entries unchanged
                 if (!isCombatAttr(attr) || mod == null) {
                     builder.add(attr, mod, e.slot());
                     continue;
                 }
+                // Multiply magnitude; preserve id/op/slot
                 double scaled = mod.amount() * factor;
                 AttributeModifier scaledMod = new AttributeModifier(mod.id(), scaled, mod.operation());
                 builder.add(attr, scaledMod, e.slot());
             }
 
+            // If no attribute component existed, try item defaults for this stack
             if (cur.modifiers().isEmpty()) {
                 ItemAttributeModifiers def = preview.getItem().getDefaultAttributeModifiers(preview);
                 for (Entry e : def.modifiers()) {
@@ -242,31 +248,34 @@ public class AngelMenu extends AbstractContainerMenu {
 
             preview.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
 
-            // Mark ghost
+            // Mark as a preview + store step% for the client tooltip
             CustomData cd = preview.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
             CustomData updated = cd.update(tag -> {
                 tag.putBoolean("iu_preview", true);
-                tag.putDouble("iu_step", step);
+                tag.putDouble("iu_step", step); // e.g., 0.05 for +5%
             });
             preview.set(DataComponents.CUSTOM_DATA, updated);
 
-            withPreviewSuppressed(() -> ghostOut.setItem(0, preview));
+            // Put into the ghost output slot (without re-triggering updatePreview)
+            withPreviewSuppressed(() -> baseInv.setItem(2, preview));
+
         } catch (Throwable t) {
             LOG.error("[AngelMenu] updatePreview failed: {}", t.toString());
             withPreviewSuppressed(() -> {
-                ghostOut.setItem(0, ItemStack.EMPTY);
+                baseInv.setItem(2, ItemStack.EMPTY);
                 previewChancePermille = 0;
             });
         }
     }
 
+    /** Run an action while suppressing setChanged->slotsChanged feedback from our ghost writes. */
     private void withPreviewSuppressed(Runnable r) {
         boolean prev = suppressPreviewUpdate;
         suppressPreviewUpdate = true;
         try { r.run(); } finally { suppressPreviewUpdate = prev; }
     }
 
-    // ---- Filtering helpers ----
+    // ---- Filtering ---------------------------------------------------------------------------
 
     private static boolean isCombatAttr(Holder<Attribute> attr) {
         return attr != null && COMBAT_ATTRS.contains(attr);
@@ -290,6 +299,7 @@ public class AngelMenu extends AbstractContainerMenu {
             ItemAttributeModifiers defs = stack.getItem().getDefaultAttributeModifiers(stack);
             if (hasCombatAttributes(defs)) return true;
 
+            // Class fallback to catch simple tools/armor that might not carry components
             Item it = stack.getItem();
             if (it instanceof ArmorItem) return true;
             if (it instanceof SwordItem) return true;
@@ -305,8 +315,9 @@ public class AngelMenu extends AbstractContainerMenu {
         return false;
     }
 
-    // ---- Name parsing ----
+    // ---- Name parsing helpers ----------------------------------------------------------------
 
+    /** Returns (baseNameComponent, level). If no "+N", level = 0. */
     private static Pair<Component, Integer> parseBaseNameAndLevel(Component name) {
         try {
             String s = name.getString();
@@ -320,6 +331,7 @@ public class AngelMenu extends AbstractContainerMenu {
         return Pair.of(name.copy(), 0);
     }
 
+    /** Strip trailing " +N" (if any). */
     private static String stripPlusSuffix(String s) {
         Matcher m = PLUS_SUFFIX.matcher(s);
         if (m.find()) return s.substring(0, m.start());
