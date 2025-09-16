@@ -1,11 +1,12 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/blockentity/SigilBlockEntity.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/world/blockentity/SigilBlockEntity.java
 package org.z2six.infiniteupgrades.world.blockentity;
 
 import com.mojang.logging.LogUtils;
+import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.SimpleContainer;
@@ -19,6 +20,11 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.world.menu.AngelMenu;
 
+/**
+ * // MainFile: SigilBlockEntity.java
+ * Holds 2 slots for the angel upgrade ritual.
+ * Defensive logging; never crashes.
+ */
 public class SigilBlockEntity extends BlockEntity implements net.minecraft.world.MenuProvider {
     private static final Logger LOG = LogUtils.getLogger();
 
@@ -39,12 +45,10 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
     }
 
     // ---- Persistence (1.21: include HolderLookup.Provider) ----
-
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
         super.saveAdditional(tag, provider);
         try {
-            // 1.21 signature requires provider
             ContainerHelper.saveAllItems(tag, inventory.getItems(), provider);
         } catch (Throwable t) {
             LOG.error("[SigilBE] saveAdditional failed: {}", t.toString());
@@ -56,7 +60,6 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
         super.loadAdditional(tag, provider);
         try {
             inventory.clearContent();
-            // 1.21 signature requires provider
             ContainerHelper.loadAllItems(tag, inventory.getItems(), provider);
         } catch (Throwable t) {
             LOG.error("[SigilBE] loadAdditional failed: {}", t.toString());
@@ -64,7 +67,6 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
     }
 
     // ---- MenuProvider ----
-
     @Override
     public Component getDisplayName() {
         return Component.translatable("gui.infiniteupgrades.angel");
@@ -74,10 +76,14 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
     @Override
     public AbstractContainerMenu createMenu(int id, Inventory playerInv, Player player) {
         try {
-            return new AngelMenu(id, playerInv, this);
+            // AngelMenu's registered factory signature is (id, inv, FriendlyByteBuf).
+            // On the SERVER, we create a tiny buffer that carries our BlockPos for the client.
+            FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            buf.writeBlockPos(this.getBlockPos());
+            return new AngelMenu(id, playerInv, buf);
         } catch (Throwable t) {
             LOG.error("[SigilBE] createMenu failed: {}", t.toString());
-            return null;
+            return null; // Returning null cancels opening gracefully.
         }
     }
 }

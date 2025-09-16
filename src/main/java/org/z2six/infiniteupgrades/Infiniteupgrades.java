@@ -1,5 +1,8 @@
-// File: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
 package org.z2six.infiniteupgrades;
+
+// NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge; remove the import/call.
+// import software.bernie.geckolib.GeckoLib;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
@@ -21,6 +24,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
@@ -31,6 +35,7 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.client.AngelRenderer;
 import org.z2six.infiniteupgrades.client.screen.AngelScreen;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
@@ -40,6 +45,7 @@ import org.z2six.infiniteupgrades.world.SigilBlock;
 
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
+
     public static final String MODID = "infiniteupgrades";
     private static final Logger LOGGER = LogUtils.getLogger();
 
@@ -76,7 +82,10 @@ public class Infiniteupgrades {
     public static final DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
 
+    // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
+        // GeckoLib.initialize() removed – not needed for 4.7.6 NeoForge
+
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerEntityAttributes);
 
@@ -84,9 +93,7 @@ public class Infiniteupgrades {
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
-        // NEW: block entities
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
-
         ModMenus.MENUS.register(modEventBus);
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
 
@@ -132,6 +139,16 @@ public class Infiniteupgrades {
                 LOGGER.debug("[InfiniteUpgrades] Registered AngelScreen");
             } catch (Throwable t) {
                 LOGGER.error("[InfiniteUpgrades] Failed to register AngelScreen", t);
+            }
+        }
+
+        @SubscribeEvent
+        public static void registerRenderers(final EntityRenderersEvent.RegisterRenderers evt) {
+            try {
+                evt.registerEntityRenderer(ModEntityTypes.ANGEL.get(), AngelRenderer::new);
+                LOGGER.debug("[InfiniteUpgrades] Registered AngelRenderer (GeckoLib)");
+            } catch (Throwable t) {
+                LOGGER.error("[InfiniteUpgrades] Failed to register AngelRenderer", t);
             }
         }
     }

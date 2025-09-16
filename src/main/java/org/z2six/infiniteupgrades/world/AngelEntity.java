@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/AngelEntity.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/world/AngelEntity.java
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
@@ -20,20 +20,30 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity;
 
-public class AngelEntity extends Mob {
+// --- GeckoLib 4.7.x ---
+import software.bernie.geckolib.animatable.GeoEntity;
+import software.bernie.geckolib.animatable.instance.AnimatableInstanceCache;
+import software.bernie.geckolib.animation.AnimatableManager.ControllerRegistrar;
+import software.bernie.geckolib.animation.AnimationController;
+import software.bernie.geckolib.animation.PlayState;
+import software.bernie.geckolib.animation.RawAnimation;
+import software.bernie.geckolib.util.GeckoLibUtil;
+
+public class AngelEntity extends Mob implements GeoEntity {
     private static final Logger LOG = LogUtils.getLogger();
+
+    // GeckoLib per-entity cache
+    private final AnimatableInstanceCache geckoCache = GeckoLibUtil.createInstanceCache(this);
+
+    // Name of the animation in your angel.animation.json → "idle"
+    private static final RawAnimation IDLE = RawAnimation.begin().thenLoop("idle");
 
     private static final EntityDataAccessor<BlockPos> ANCHOR_POS =
             SynchedEntityData.defineId(AngelEntity.class, EntityDataSerializers.BLOCK_POS);
@@ -116,7 +126,6 @@ public class AngelEntity extends Mob {
 
         if (level().isClientSide) {
             try {
-                // Avoid deprecated overload; use predicate version (1.21-safe)
                 Player p = this.level().getNearestPlayer(
                         this.getX(), this.getY(), this.getZ(),
                         128.0,
@@ -140,7 +149,7 @@ public class AngelEntity extends Mob {
                     if (anchor == null || anchor == BlockPos.ZERO) return;
                     BlockState bs = ((ServerLevel) level()).getBlockState(anchor);
                     Block block = bs.getBlock();
-                    if (!(block instanceof SigilBlock)) {
+                    if (!(block instanceof org.z2six.infiniteupgrades.world.SigilBlock)) {
                         LOG.debug("[AngelEntity] Anchor missing at {}; discarding", anchor);
                         this.discard();
                         return;
@@ -156,20 +165,22 @@ public class AngelEntity extends Mob {
     @Override
     protected InteractionResult mobInteract(Player player, InteractionHand hand) {
         try {
-            ItemStack held = player.getItemInHand(hand);
-            if (held.is(Items.NAME_TAG)) {
+            if (!(player instanceof ServerPlayer sp)) return InteractionResult.SUCCESS;
+
+            // Allow vanilla name tag behavior
+            if (player.getItemInHand(hand).is(net.minecraft.world.item.Items.NAME_TAG)) {
                 return super.mobInteract(player, hand);
             }
-            if (!level().isClientSide) {
-                BlockPos anchor = getAnchor();
-                BlockEntity be = level().getBlockEntity(anchor);
-                if (be instanceof SigilBlockEntity sigil) {
-                    ((ServerPlayer)player).openMenu(sigil, anchor);
-                    return InteractionResult.CONSUME;
-                } else {
-                    LOG.warn("[AngelEntity] No SigilBlockEntity at {}", anchor);
-                }
+
+            BlockPos anchor = getAnchor();
+            BlockEntity be = level().getBlockEntity(anchor);
+            if (be instanceof org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity sigil) {
+                sp.openMenu(sigil, anchor);
+                return InteractionResult.CONSUME;
+            } else {
+                LOG.warn("[AngelEntity] No SigilBlockEntity at {}", anchor);
             }
+
             return InteractionResult.SUCCESS;
         } catch (Throwable t) {
             LOG.error("[AngelEntity] mobInteract failed: {}", t.toString());
@@ -200,5 +211,25 @@ public class AngelEntity extends Mob {
         } catch (Throwable t) {
             LOG.error("[AngelEntity] readAdditionalSaveData failed: {}", t.toString());
         }
+    }
+
+    // ------------- GeckoLib: required methods + controller -------------
+    @Override
+    public AnimatableInstanceCache getAnimatableInstanceCache() {
+        return geckoCache;
+    }
+
+    @Override
+    public void registerControllers(ControllerRegistrar controllers) {
+        // Always play/loop "idle". If the name ever changes, update the RawAnimation above.
+        controllers.add(new AnimationController<>(this, "angel_idle", 0, state -> {
+            try {
+                state.setAndContinue(IDLE);
+                return PlayState.CONTINUE;
+            } catch (Throwable t) {
+                LOG.error("[AngelEntity] Animation controller error: {}", t.toString());
+                return PlayState.STOP;
+            }
+        }));
     }
 }
