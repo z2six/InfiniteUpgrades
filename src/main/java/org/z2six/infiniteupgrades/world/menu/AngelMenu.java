@@ -186,6 +186,28 @@ public class AngelMenu extends AbstractContainerMenu {
         }
     }
 
+    // ---- Lifecycle: return inputs when the menu closes -----------------------------------------
+
+    @Override
+    public void removed(Player player) {
+        try {
+            super.removed(player);
+        } catch (Throwable t) {
+            LOG.error("[AngelMenu] super.removed threw: {}", t.toString());
+        }
+
+        try {
+            // Ensure the ghost output is never returned
+            withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
+
+            // Return inputs to the player; if inventory is full, they drop on the ground.
+            this.clearContainer(player, baseInv);
+            LOG.debug("[AngelMenu] Menu closed; returned input items to {}", player != null ? player.getName().getString() : "null-player");
+        } catch (Throwable t) {
+            LOG.error("[AngelMenu] removed() failed to clear/return items: {}", t.toString());
+        }
+    }
+
     // ---- Preview logic (client-safe, no server mutation) ---------------------------------------
 
     /** Update preview item (slot 2) and cached chance text. */
