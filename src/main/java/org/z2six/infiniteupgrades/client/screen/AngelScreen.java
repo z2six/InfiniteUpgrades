@@ -1,14 +1,12 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelScreen.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelScreen.java
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.FormattedText;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
@@ -22,18 +20,24 @@ import org.z2six.infiniteupgrades.world.menu.AngelMenu;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Renders the custom Angel container GUI and tooltips.
+ * PNG is 512x512, but we only draw the top-left 274x166 region.
+ */
 public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // Use vanilla anvil GUI so we always have a texture
-    private static final ResourceLocation BG = ResourceLocation.withDefaultNamespace("textures/gui/container/anvil.png");
+    private static final ResourceLocation BG =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/angel_menu.png");
+
+    // Actual GUI portion size (top-left of 512x512)
+    private static final int IMAGE_W = 274;
+    private static final int IMAGE_H = 166;
 
     public AngelScreen(AngelMenu menu, Inventory inv, Component title) {
-        // Title not shown; pass empty to avoid surprises
         super(menu, inv, Component.empty());
-        this.imageWidth = 176;
-        this.imageHeight = 166;
-        // We won't draw labels, but keep positions sensible if you ever turn them back on
+        this.imageWidth = IMAGE_W;
+        this.imageHeight = IMAGE_H;
         this.titleLabelX = 8;
         this.titleLabelY = 6;
         this.inventoryLabelX = 8;
@@ -48,64 +52,46 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
 
     @Override
     public void render(GuiGraphics gg, int mouseX, int mouseY, float partialTick) {
-        // Background first
         this.renderBackground(gg, mouseX, mouseY, partialTick);
 
-        // Intercept vanilla tooltip ONLY for preview slot (index 2)
         Slot prevHovered = this.hoveredSlot;
         boolean interceptPreviewTooltip = prevHovered != null && prevHovered.index == 2 && prevHovered.hasItem();
-
         if (interceptPreviewTooltip) {
-            // Prevent super.render from drawing vanilla tooltip for slot 2
             this.hoveredSlot = null;
         }
 
-        // Draw everything else (slots, item stacks, etc.)
         super.render(gg, mouseX, mouseY, partialTick);
 
         if (interceptPreviewTooltip) {
-            // Build modified tooltip for preview stack
             ItemStack stack = this.menu.getSlot(2).getItem();
-
-            // Vanilla tooltip (static on Screen in 1.21)
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
-
-            // Post-process: append (+X%) to combat attribute lines
             List<Component> modified = addPercentSuffixToCombatLines(stack, vanilla);
-
-            // Convert to visual-order text for GuiGraphics API
-            List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
-                    .map(Component::getVisualOrderText)
-                    .toList();
-
-            // Render our adjusted tooltip
+            List<net.minecraft.util.FormattedCharSequence> ordered =
+                    modified.stream().map(Component::getVisualOrderText).toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         }
-
-        // (No additional tooltips here; super.render already drew for other slots)
     }
 
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
-        // Vanilla anvil BG
-        gg.blit(BG, leftPos, topPos, 0, 0, imageWidth, imageHeight);
+        // Only blit the top-left 274x166 of the 512x512 texture
+        gg.blit(BG, leftPos, topPos,
+                0, 0,                    // source U,V
+                imageWidth, imageHeight, // width/height to draw
+                512, 512);               // full texture size of the PNG
 
-        // Simple blue progress bar placeholder (0..54 px wide)
+        // Example: blue progress bar
         int barLeft = leftPos + 72;
         int barTop = topPos + 38;
-        int w = 54; // no real progress yet; purely visual
+        int w = 54;
         gg.fill(barLeft, barTop, barLeft + w, barTop + 6, 0xFF3A7BD5);
     }
 
-    // Intentionally draw NO labels (no title, no "chance" text)
     @Override
     protected void renderLabels(GuiGraphics gg, int mouseX, int mouseY) {
-        // no-op
+        // no labels
     }
 
-    // ---- Tooltip post-processing ---------------------------------------------------------------
-
-    /** Append " (+X%)" to combat attribute lines in the tooltip, using iu_step on the preview stack. */
     private static List<Component> addPercentSuffixToCombatLines(ItemStack preview, List<Component> vanilla) {
         double step = 0.0;
         try {
@@ -113,36 +99,30 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
             if (cd != null) {
                 CompoundTag tag = cd.copyTag();
                 if (tag.contains("iu_step")) {
-                    step = tag.getDouble("iu_step"); // e.g., 0.05 for +5%
+                    step = tag.getDouble("iu_step");
                 }
             }
         } catch (Throwable ignored) {}
 
         int pct = (int)Math.round(step * 100.0);
-        if (pct <= 0) return vanilla; // nothing to add
+        if (pct <= 0) return vanilla;
 
         List<Component> out = new ArrayList<>(vanilla.size());
         for (Component c : vanilla) {
             String s = c.getString();
             String lower = s.toLowerCase();
-
-            // Skip the equipment-slot header lines like "When in Main Hand"
             if (lower.startsWith("when ")) {
                 out.add(c);
                 continue;
             }
-
-            // Only target the common combat attribute lines; keep all other lines unchanged.
             boolean isCombatLine =
                     lower.contains("attack damage") ||
                             lower.contains("attack speed")  ||
                             lower.contains("armor toughness") ||
-                            // guard so plain "armor" in other strings isn't caught accidentally:
                             (lower.contains(" armor") && !lower.contains("armor trim")) ||
                             lower.contains("knockback resistance");
 
             if (isCombatLine && !s.contains("(+")) {
-                // Keep original style; just append the colored suffix
                 out.add(c.copy().append(Component.literal(" (+" + pct + "%)").withStyle(ChatFormatting.BLUE)));
             } else {
                 out.add(c);

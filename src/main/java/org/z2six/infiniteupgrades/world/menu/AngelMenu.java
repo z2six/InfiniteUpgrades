@@ -1,3 +1,4 @@
+// MainFile: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelMenu.java
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -30,13 +31,33 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
+ * // MainFile: AngelMenu.java
  * Angel menu with client-only preview in output slot (index 2).
  * - Slot 0: weapon/armor (filtered by combat attributes/classes)
  * - Slot 1: resource (iron ingot for now)
  * - Slot 2: PREVIEW ONLY (cannot be taken)
+ *
+ * Tweaks:
+ * - Expose slot coordinates as constants so you can align to your PNG.
  */
 public class AngelMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
+
+    // ---------------- Slot coordinates (GUI-relative) ----------------
+    // Tweak these to match the art you placed in AngelScreen (PNG).
+    public static final int INPUT1_X = 27;
+    public static final int INPUT1_Y = 47;
+
+    public static final int INPUT2_X = 76;
+    public static final int INPUT2_Y = 47;
+
+    public static final int OUTPUT_X = 134;
+    public static final int OUTPUT_Y = 47;
+
+    // Player inv anchors (vanilla layout)
+    private static final int PLAYER_INV_X = 8;
+    private static final int PLAYER_INV_Y = 84;
+    private static final int HOTBAR_Y     = 142;
 
     // Consider these as "combat attributes" for filtering & scaling
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
@@ -57,7 +78,6 @@ public class AngelMenu extends AbstractContainerMenu {
     private final Container baseInv = new SimpleContainer(3) {
         @Override public void setChanged() {
             super.setChanged();
-            // Skip callback while we are programmatically writing the ghost preview
             if (suppressPreviewUpdate) return;
             try { AngelMenu.this.slotsChanged(this); }
             catch (Throwable t) { LOG.error("[AngelMenu] slotsChanged dispatch failed: {}", t.toString()); }
@@ -71,28 +91,28 @@ public class AngelMenu extends AbstractContainerMenu {
         super(ModMenus.ANGEL_MENU.get(), id);
         try {
             // Inputs
-            this.addSlot(new Slot(baseInv, 0, 44, 35) {
+            this.addSlot(new Slot(baseInv, 0, INPUT1_X, INPUT1_Y) {
                 @Override public boolean mayPlace(ItemStack stack) { return isCombatItem(stack); }
             });
-            this.addSlot(new Slot(baseInv, 1, 62, 35) {
+            this.addSlot(new Slot(baseInv, 1, INPUT2_X, INPUT2_Y) {
                 @Override public boolean mayPlace(ItemStack stack) { return stack.is(Items.IRON_INGOT); }
             });
 
             // Output (preview) – cannot pick up
-            this.addSlot(new Slot(baseInv, 2, 120, 35) {
+            this.addSlot(new Slot(baseInv, 2, OUTPUT_X, OUTPUT_Y) {
                 @Override public boolean mayPlace(ItemStack stack) { return false; }
                 @Override public boolean mayPickup(Player player) { return false; }
             });
 
-            // Player inventory
-            int startY = 84;
+            // Player inventory (3 rows)
             for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 9; ++col) {
-                    this.addSlot(new Slot(inv, col + row * 9 + 9, 8 + col * 18, startY + row * 18));
+                    this.addSlot(new Slot(inv, col + row * 9 + 9, PLAYER_INV_X + col * 18, PLAYER_INV_Y + row * 18));
                 }
             }
+            // Hotbar
             for (int col = 0; col < 9; ++col) {
-                this.addSlot(new Slot(inv, col, 8 + col * 18, startY + 58));
+                this.addSlot(new Slot(inv, col, PLAYER_INV_X + col * 18, HOTBAR_Y));
             }
 
             // Initial preview
