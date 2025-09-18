@@ -18,8 +18,7 @@ import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.world.menu.AngelMenu;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,8 +27,12 @@ import java.util.regex.Pattern;
  * PNG is 512x512, but we only draw the top-left 274x166 region.
  *
  * Tooltips:
- *  - We only intercept slot 2 when it holds a GHOST preview (iu_preview=true).
- *  - Otherwise we ALWAYS call vanilla renderTooltip so every other slot shows normal tooltips.
+ *  - PREVIEW (slot 2 with iu_preview=true):
+ *      Obfuscates numeric parts (same as before).
+ *  - REAL items (any slot, including output after infusion):
+ *      We augment each combat-attribute line by appending " (+X%)"
+ *      where X is the accumulated percent from the item audit
+ *      (iu_upgrade -> totals[<attrId>] -> sumPercent).
  *
  * Button:
  *  - "Infuse" sends a menu button click (server receives in AngelMenu.clickMenuButton).
@@ -48,6 +51,16 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     // Regex: bracketed breakdowns like "[1 + 7]" (non-greedy)
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
+
+    // Mapping displayed English names to our audit attribute ids
+    // (Safe best-effort; if the user's language differs, we still show vanilla text.)
+    private static final Map<String, String> DISPLAY_TO_ATTR_ID = Map.of(
+            "attack damage", "minecraft:generic.attack_damage",
+            "attack speed", "minecraft:generic.attack_speed",
+            "armor toughness", "minecraft:generic.armor_toughness",
+            "knockback resistance", "minecraft:generic.knockback_resistance",
+            "armor", "minecraft:generic.armor"
+    );
 
     private Button infuseBtn;
 
@@ -89,47 +102,54 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // Background first
         this.renderBackground(gg, mouseX, mouseY, partialTick);
 
-        // Intercept vanilla tooltip ONLY for OUTPUT slot when it is a GHOST preview.
-        Slot prevHovered = this.hoveredSlot;
-        boolean intercept = false;
-        if (prevHovered != null && prevHovered.index == 2 && prevHovered.hasItem()) {
-            ItemStack s = prevHovered.getItem();
-            intercept = isPreview(s); // only intercept when iu_preview=true
+        // Decide if we intercept for preview or augment for real items
+        Slot hoveredBefore = this.hoveredSlot;
+        boolean interceptPreview = false;
+        boolean augmentReal = false;
+
+        if (hoveredBefore != null && hoveredBefore.hasItem()) {
+            ItemStack s = hoveredBefore.getItem();
+            if (hoveredBefore.index == 2 && isPreview(s)) {
+                interceptPreview = true; // custom obfuscated tooltip
+            } else {
+                augmentReal = true;      // vanilla + "(+X%)" tail on combat lines
+            }
         }
 
-        if (intercept) {
-            // Prevent super.render from drawing vanilla tooltip for slot 2
+        if (interceptPreview) {
+            // Prevent super.render from drawing vanilla tooltip for PREVIEW
             this.hoveredSlot = null;
             LOG.debug("[AngelScreen] Intercepting tooltip for preview in slot 2");
         }
 
-        // Draw everything else (slots, item stacks, widgets)
+        // Draw everything (slots/items/widgets)
         super.render(gg, mouseX, mouseY, partialTick);
 
         // Restore hovered slot BEFORE we draw any tooltip
-        if (intercept) {
-            this.hoveredSlot = prevHovered;
-        }
+        if (interceptPreview) this.hoveredSlot = hoveredBefore;
 
-        if (intercept) {
+        if (interceptPreview) {
             // Build modified tooltip for PREVIEW stack
             ItemStack stack = this.menu.getSlot(2).getItem();
-
-            // Vanilla tooltip (static on Screen in 1.21)
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
-
-            // Obfuscate numeric parts on combat attribute lines
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
 
-            // Convert to visual-order text for GuiGraphics API
             List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
                     .map(Component::getVisualOrderText)
                     .toList();
+            gg.renderTooltip(this.font, ordered, mouseX, mouseY);
+        } else if (augmentReal) {
+            // Augment any real item’s tooltip inside our GUI (including output after infusion)
+            ItemStack stack = hoveredBefore.getItem();
+            List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
+            List<Component> modified = appendPercentFromAudit(stack, vanilla);
 
-            // Render adjusted tooltip
+            List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
+                    .map(Component::getVisualOrderText)
+                    .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         } else {
-            // Not intercepting: ALWAYS let vanilla draw tooltips for hovered items
+            // Not intercepting: let vanilla draw tooltips
             this.renderTooltip(gg, mouseX, mouseY);
         }
     }
@@ -149,7 +169,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // no labels for now
     }
 
-    // ---- Tooltip post-processing (preview only) -----------------------------------------------
+    // ---- Tooltip post-processing ---------------------------------------------------------------
 
     /** Only used for the PREVIEW ghost. */
     private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
@@ -197,6 +217,86 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
             out.add(rebuilt);
         }
         return out;
+    }
+
+    /** For REAL items: append " (+X%)" to combat lines based on our audit totals. */
+    private static List<Component> appendPercentFromAudit(ItemStack stack, List<Component> vanilla) {
+        // Read totals map once
+        Map<String, Double> totals = readAuditPercents(stack);
+        if (totals.isEmpty()) return vanilla; // nothing to add
+
+        List<Component> out = new ArrayList<>(vanilla.size());
+        for (Component c : vanilla) {
+            String raw = c.getString();
+            String lower = raw.toLowerCase();
+
+            // Equipment-slot headers etc.
+            if (lower.startsWith("when ")) {
+                out.add(c);
+                continue;
+            }
+
+            // Identify which attribute line this is (english match best-effort)
+            String matchedAttrId = null;
+            for (Map.Entry<String, String> e : DISPLAY_TO_ATTR_ID.entrySet()) {
+                if (lower.contains(e.getKey())) {
+                    matchedAttrId = e.getValue();
+                    break;
+                }
+            }
+            if (matchedAttrId == null) {
+                out.add(c);
+                continue;
+            }
+
+            Double sumPct = totals.get(matchedAttrId);
+            if (sumPct == null || Math.abs(sumPct) < 1.0e-9) {
+                out.add(c);
+                continue;
+            }
+
+            // Build " (+X%)" with color by sign
+            String pctText = formatPercent(sumPct); // e.g., "+15%" or "-5%"
+            ChatFormatting col = sumPct >= 0.0 ? ChatFormatting.DARK_GREEN : ChatFormatting.RED;
+
+            MutableComponent withTail = c.copy().append(Component.literal(" (" + pctText + ")").withStyle(col));
+            out.add(withTail);
+        }
+        return out;
+    }
+
+    private static Map<String, Double> readAuditPercents(ItemStack stack) {
+        try {
+            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
+            if (cd == null) return Map.of();
+            var root = cd.copyTag().getCompound("iu_upgrade");
+            if (root == null) return Map.of();
+            var totals = root.getCompound("totals");
+            if (totals == null || totals.isEmpty()) return Map.of();
+
+            Map<String, Double> map = new HashMap<>();
+            for (String key : totals.getAllKeys()) {
+                var a = totals.getCompound(key);
+                double sumPercent = a.getDouble("sumPercent");
+                map.put(key, sumPercent);
+            }
+            return map;
+        } catch (Throwable ignored) {
+            return Map.of();
+        }
+    }
+
+    private static String formatPercent(double frac) {
+        // Convert fraction to percent string; keep one decimal if needed.
+        double val = frac * 100.0;
+        double abs = Math.abs(val);
+        String sign = val >= 0 ? "+" : "-";
+        double rounded = (abs % 1.0 < 0.05) ? Math.rint(abs) : Math.round(abs * 10.0) / 10.0;
+        if (Math.abs(rounded - Math.rint(abs)) < 1e-9) {
+            return sign + ((int)Math.rint(abs)) + "%";
+        } else {
+            return sign + rounded + "%";
+        }
     }
 
     /** Obfuscate every [...] segment in the input, preserving other text. */

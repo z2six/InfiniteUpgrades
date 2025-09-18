@@ -23,8 +23,10 @@ import java.util.*;
  *     decrementPerLevel: double (0..1)   [for FLAT]
  *     exponentialBase: double (0..1)     [for EXPONENTIAL, e.g. 0.95]
  *     overrides: list of "level=chance"  (applies at current level L for L->L+1)
+ * - nameSuffix:
+ *     tiers: list of "min-max:#RRGGBB" (color per +N range)
  * - attributes:
- *     each attribute gets its own section under attributes.<namespace>.<path>.* with:
+ *     each attribute gets its own section under attributes.<namespace>.<group>.<name>.* with:
  *       enabled: boolean
  *       weight: int
  *       direction: "INCREASE"|"DECREASE"
@@ -62,8 +64,10 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue CHANCE_EXP_BASE;    // for EXP
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CHANCE_OVERRIDES;
 
-    // attributes.<namespace>.<path> blocks
-    // We’ll build 5 default attribute sections (you can add more later easily).
+    // nameSuffix tiers (server controls color of " +N")
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> NAME_SUFFIX_TIERS;
+
+    // attributes.<namespace>.<group>.<name> blocks (5 defaults)
     public static final AttributeSection ATTACK_DAMAGE =
             new AttributeSection(B, "minecraft", "generic", "attack_damage",
                     true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -117,14 +121,36 @@ public final class UpgradeServerConfig {
                 .defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
         B.pop();
 
-        // Attribute sections are already pushed in their ctors.
+        B.push("nameSuffix");
+        NAME_SUFFIX_TIERS = B.comment("Color tiers for the +N name suffix. Format: \"min-max:#RRGGBB\"")
+                .defineListAllowEmpty(
+                        "tiers",
+                        List.of("1-4:#55FFFF", "5-9:#AA00FF", "10-999:#FFAA00"),
+                        o -> o instanceof String
+                );
+        B.pop();
+
+        // Attribute sections are pushed within their ctors.
 
         SPEC = B.build();
     }
 
     private UpgradeServerConfig() {}
 
-    // ---- SNAPSHOT ----
+    // ---- Snapshot model ----
+
+    public static final class SuffixTier {
+        public final int min;
+        public final int max;
+        public final int colorRGB; // 0xRRGGBB
+        public SuffixTier(int min, int max, int rgb) {
+            this.min = Math.max(0, min);
+            this.max = Math.max(this.min, max);
+            this.colorRGB = rgb;
+        }
+        public boolean matches(int level) { return level >= min && level <= max; }
+    }
+
     public static final class Snapshot {
         public final UpgradeMode upgradeMode;
         public final int maxLevel;
@@ -135,11 +161,13 @@ public final class UpgradeServerConfig {
         public final Map<Integer, Double> chanceOverrides;
 
         public final List<AttributeRuleConfig> attributes; // parsed rules
+        public final List<SuffixTier> suffixTiers;
 
         private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
                          double start, double dec, double expBase,
                          Map<Integer, Double> overrides,
-                         List<AttributeRuleConfig> attrs) {
+                         List<AttributeRuleConfig> attrs,
+                         List<SuffixTier> tiers) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
             this.chanceModel = cm;
@@ -148,11 +176,12 @@ public final class UpgradeServerConfig {
             this.exponentialBase = expBase;
             this.chanceOverrides = overrides;
             this.attributes = attrs;
+            this.suffixTiers = tiers;
         }
     }
 
     public static final class AttributeRuleConfig {
-        public final ResourceLocation id; // attribute RL
+        public final ResourceLocation id; // attribute RL like minecraft:generic.attack_damage
         public final boolean enabled;
         public final int weight;
         public final Direction direction;
@@ -201,8 +230,11 @@ public final class UpgradeServerConfig {
             attrs.add(ARMOR_TOUGHNESS.toRuleConfig());
             attrs.add(KNOCKBACK_RESISTANCE.toRuleConfig());
 
+            List<SuffixTier> tiers = parseSuffixTiers(NAME_SUFFIX_TIERS.get());
+
             return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
-                    Collections.unmodifiableList(attrs));
+                    Collections.unmodifiableList(attrs),
+                    Collections.unmodifiableList(tiers));
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
             return new Snapshot(
@@ -217,7 +249,8 @@ public final class UpgradeServerConfig {
                             ARMOR.fallback(),
                             ARMOR_TOUGHNESS.fallback(),
                             KNOCKBACK_RESISTANCE.fallback()
-                    )
+                    ),
+                    parseSuffixTiers(List.of("1-4:#55FFFF", "5-9:#AA00FF", "10-999:#FFAA00"))
             );
         }
     }
@@ -243,6 +276,46 @@ public final class UpgradeServerConfig {
             }
         }
         return Collections.unmodifiableMap(out);
+    }
+
+    private static List<SuffixTier> parseSuffixTiers(@Nullable List<? extends String> lines) {
+        List<SuffixTier> out = new ArrayList<>();
+        if (lines == null) return out;
+        for (Object o : lines) {
+            if (!(o instanceof String s)) continue;
+            String t = s.trim();
+            if (t.isEmpty()) continue;
+            // "min-max:#RRGGBB"
+            int dash = t.indexOf('-');
+            int colon = t.indexOf(':');
+            if (dash <= 0 || colon <= dash + 1 || colon >= t.length() - 1) {
+                LOG.error("[UpgradeServerConfig] Invalid nameSuffix tier '{}'", s);
+                continue;
+            }
+            try {
+                int min = Integer.parseInt(t.substring(0, dash).trim());
+                int max = Integer.parseInt(t.substring(dash + 1, colon).trim());
+                String hex = t.substring(colon + 1).trim();
+                if (hex.startsWith("#")) hex = hex.substring(1);
+                int rgb = (int)Long.parseLong(hex, 16);
+                // normalize to 0xRRGGBB
+                rgb &= 0xFFFFFF;
+                out.add(new SuffixTier(min, max, rgb));
+            } catch (Throwable nfe) {
+                LOG.error("[UpgradeServerConfig] Failed parsing suffix tier '{}': {}", s, nfe.toString());
+            }
+        }
+        return out;
+    }
+
+    public static int resolveSuffixColor(int level) {
+        try {
+            List<SuffixTier> tiers = snapshot().suffixTiers;
+            for (SuffixTier t : tiers) {
+                if (t.matches(level)) return t.colorRGB;
+            }
+        } catch (Throwable ignored) {}
+        return 0; // 0 means "no explicit color", caller may fall back
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }
@@ -302,9 +375,8 @@ public final class UpgradeServerConfig {
 
         public AttributeRuleConfig toRuleConfig() {
             try {
-                ResourceLocation id = ResourceLocation.parse(ns + ":" + "generic" + "." + name).withPrefix(""); // we want minecraft:generic.attack_damage
-                // Reconstruct "minecraft:generic.attack_damage"
-                id = ResourceLocation.parse(ns + ":" + grp + "." + name);
+                // Expect e.g. minecraft:generic.attack_damage
+                ResourceLocation id = ResourceLocation.parse(ns + ":" + grp + "." + name);
                 return new AttributeRuleConfig(
                         id,
                         enabled.get(),

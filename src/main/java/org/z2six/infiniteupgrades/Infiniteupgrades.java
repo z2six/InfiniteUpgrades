@@ -84,6 +84,7 @@ public class Infiniteupgrades {
 
     // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
+        // Registry/event wiring
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerEntityAttributes);
 
@@ -95,18 +96,23 @@ public class Infiniteupgrades {
         ModMenus.MENUS.register(modEventBus);
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
 
+        // Listen to common-bus gameplay events (ServerStartingEvent below)
         NeoForge.EVENT_BUS.register(this);
 
         // Existing COMMON config (your original)
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
-        // NEW: SERVER-authoritative upgrade config
-        modContainer.registerConfig(ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
-        LOGGER.debug("[Infiniteupgrades] Registered SERVER config for upgrades");
 
+        // SERVER-authoritative upgrade config
+        modContainer.registerConfig(ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
+
+        // ✅ Correct: Mod config events belong to the MOD event bus, not the common bus
+        modEventBus.addListener(UpgradeServerConfig::onServerConfigReload);
+
+        LOGGER.debug("[Infiniteupgrades] Registered SERVER config for upgrades");
         LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
-    private void addCreative(net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
+    private void addCreative(BuildCreativeModeTabContentsEvent event) {
         try {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
                 event.accept(EXAMPLE_BLOCK_ITEM);
