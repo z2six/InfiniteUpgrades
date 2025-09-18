@@ -1,8 +1,7 @@
 // MainFile: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
 package org.z2six.infiniteupgrades;
 
-// NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge; remove the import/call.
-// import software.bernie.geckolib.GeckoLib;
+// NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
@@ -37,6 +36,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.AngelRenderer;
 import org.z2six.infiniteupgrades.client.screen.AngelScreen;
+import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.registry.ModMenus;
@@ -84,8 +84,6 @@ public class Infiniteupgrades {
 
     // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
-        // GeckoLib.initialize() removed – not needed for 4.7.6 NeoForge
-
         modEventBus.addListener(this::addCreative);
         modEventBus.addListener(this::registerEntityAttributes);
 
@@ -98,12 +96,17 @@ public class Infiniteupgrades {
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
 
         NeoForge.EVENT_BUS.register(this);
+
+        // Existing COMMON config (your original)
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        // NEW: SERVER-authoritative upgrade config
+        modContainer.registerConfig(ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
+        LOGGER.debug("[Infiniteupgrades] Registered SERVER config for upgrades");
 
         LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
-    private void addCreative(BuildCreativeModeTabContentsEvent event) {
+    private void addCreative(net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
         try {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
                 event.accept(EXAMPLE_BLOCK_ITEM);
