@@ -1,4 +1,3 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelMenu.java
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -24,6 +23,7 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Config;
+import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.UpgradeService;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 
@@ -334,8 +334,9 @@ public class AngelMenu extends AbstractContainerMenu {
             int currentLevel = baseAndLevel.getSecond();
             int nextLevel = currentLevel + 1;
 
-            // Respect max level from config
-            if (nextLevel > Config.TUNING.maxLevel) {
+            // Respect max level from SERVER config
+            int maxLevel = UpgradeServerConfig.snapshot().maxLevel;
+            if (nextLevel > maxLevel) {
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
@@ -347,16 +348,17 @@ public class AngelMenu extends AbstractContainerMenu {
             double chance = UpgradeService.getSuccessChance(currentLevel);
             previewChancePermille = (int)Math.round(chance * 1000.0);
 
-            // Scale factor for THIS increment (not total)
+            // Scale factor for THIS increment (not total). Numbers are obfuscated anyway.
             double step = Config.TUNING.percentBonusForLevelUp(currentLevel);
             double factor = 1.0 + step;
 
             // Build GHOST preview: clone input, rewrite name to "Base +next", scale combat modifiers
             ItemStack preview = in.copy();
 
-            // Name: Base +N (strip any existing suffix first)
+            // Name: Base +N (strip any existing suffix first), with SERVER color thresholds
+            ChatFormatting lvlColor = UpgradeServerConfig.nameColorForLevel(nextLevel);
             Component pretty = Component.literal(stripPlusSuffix(in.getHoverName().getString()))
-                    .append(Component.literal(" +" + nextLevel).withStyle(ChatFormatting.AQUA));
+                    .append(Component.literal(" +" + nextLevel).withStyle(lvlColor));
             preview.set(DataComponents.CUSTOM_NAME, pretty);
 
             // Attributes: read current modifiers then multiply combat amounts by factor
@@ -398,7 +400,7 @@ public class AngelMenu extends AbstractContainerMenu {
             CustomData cd = preview.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
             CustomData updated = cd.update(tag -> {
                 tag.putBoolean("iu_preview", true);
-                tag.putDouble("iu_step", step); // informational; the screen may ignore it
+                tag.putDouble("iu_step", step); // informational; screen ignores the number
             });
             preview.set(DataComponents.CUSTOM_DATA, updated);
 

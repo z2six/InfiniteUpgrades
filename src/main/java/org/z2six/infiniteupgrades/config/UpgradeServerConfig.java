@@ -1,7 +1,7 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/config/UpgradeServerConfig.java
 package org.z2six.infiniteupgrades.config;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.ChatFormatting;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -17,30 +17,15 @@ import java.util.*;
  * - general:
  *     maxLevel: int
  *     upgradeMode: "RANDOM" | "ALL"
+ *     nameColorRules: list of ranges mapping to colors, e.g.
+ *         ["1-4=blue","5-9=light_purple","10+=gold"]
  * - chance:
  *     model: "FLAT_DECREMENT" | "EXPONENTIAL"
  *     startChance: double (0..1)
  *     decrementPerLevel: double (0..1)   [for FLAT]
  *     exponentialBase: double (0..1)     [for EXPONENTIAL, e.g. 0.95]
  *     overrides: list of "level=chance"  (applies at current level L for L->L+1)
- * - nameSuffix:
- *     tiers: list of "min-max:#RRGGBB" (color per +N range)
- * - attributes:
- *     each attribute gets its own section under attributes.<namespace>.<group>.<name>.* with:
- *       enabled: boolean
- *       weight: int
- *       direction: "INCREASE"|"DECREASE"
- *       stepType: "PERCENT"|"ADDITIVE"
- *       defaultStep: double
- *       perLevelOverrides: list of "level=step"
- *       capMin: double (optional)
- *       capMax: double (optional)
- *       applyToMagnitude: boolean  (true for attack_speed)
- *       rounding: double (e.g., 0.01, 0.1)  (0 = no rounding)
- *
- * Notes:
- * - We ship with sane defaults for 5 vanilla attributes.
- * - Parsing is defensive; we log and continue.
+ * - attributes: see AttributeSection
  */
 public final class UpgradeServerConfig {
     private static final Logger LOG = LogUtils.getLogger();
@@ -57,6 +42,9 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.IntValue GENERAL_MAX_LEVEL;
     public static final ModConfigSpec.EnumValue<UpgradeMode> GENERAL_MODE;
 
+    // name color rules
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> NAME_COLOR_RULES;
+
     // chance
     public static final ModConfigSpec.EnumValue<ChanceModelType> CHANCE_MODEL;
     public static final ModConfigSpec.DoubleValue CHANCE_START;
@@ -64,10 +52,7 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue CHANCE_EXP_BASE;    // for EXP
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CHANCE_OVERRIDES;
 
-    // nameSuffix tiers (server controls color of " +N")
-    public static final ModConfigSpec.ConfigValue<List<? extends String>> NAME_SUFFIX_TIERS;
-
-    // attributes.<namespace>.<group>.<name> blocks (5 defaults)
+    // attributes.<namespace>.<path> blocks (our 5 defaults)
     public static final AttributeSection ATTACK_DAMAGE =
             new AttributeSection(B, "minecraft", "generic", "attack_damage",
                     true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -106,6 +91,12 @@ public final class UpgradeServerConfig {
                 .defineInRange("maxLevel", 20, 0, 1000);
         GENERAL_MODE = B.comment("Upgrade mode: RANDOM (pick one attribute) or ALL (apply all).")
                 .defineEnum("upgradeMode", UpgradeMode.RANDOM);
+
+        NAME_COLOR_RULES = B.comment("Name color tiers by level. Formats: 'A-B=color', 'A+=color', or 'N=color'.",
+                        "Default: [\"1-4=blue\",\"5-9=light_purple\",\"10+=gold\"]")
+                .defineListAllowEmpty("nameColorRules",
+                        List.of("1-4=blue", "5-9=light_purple", "10+=gold"),
+                        o -> o instanceof String);
         B.pop();
 
         B.push("chance");
@@ -121,36 +112,12 @@ public final class UpgradeServerConfig {
                 .defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
         B.pop();
 
-        B.push("nameSuffix");
-        NAME_SUFFIX_TIERS = B.comment("Color tiers for the +N name suffix. Format: \"min-max:#RRGGBB\"")
-                .defineListAllowEmpty(
-                        "tiers",
-                        List.of("1-4:#55FFFF", "5-9:#AA00FF", "10-999:#FFAA00"),
-                        o -> o instanceof String
-                );
-        B.pop();
-
-        // Attribute sections are pushed within their ctors.
-
         SPEC = B.build();
     }
 
     private UpgradeServerConfig() {}
 
-    // ---- Snapshot model ----
-
-    public static final class SuffixTier {
-        public final int min;
-        public final int max;
-        public final int colorRGB; // 0xRRGGBB
-        public SuffixTier(int min, int max, int rgb) {
-            this.min = Math.max(0, min);
-            this.max = Math.max(this.min, max);
-            this.colorRGB = rgb;
-        }
-        public boolean matches(int level) { return level >= min && level <= max; }
-    }
-
+    // ---- SNAPSHOT ----
     public static final class Snapshot {
         public final UpgradeMode upgradeMode;
         public final int maxLevel;
@@ -160,14 +127,12 @@ public final class UpgradeServerConfig {
         public final double exponentialBase;
         public final Map<Integer, Double> chanceOverrides;
 
-        public final List<AttributeRuleConfig> attributes; // parsed rules
-        public final List<SuffixTier> suffixTiers;
+        public final List<AttributeRuleConfig> attributes;
 
         private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
                          double start, double dec, double expBase,
                          Map<Integer, Double> overrides,
-                         List<AttributeRuleConfig> attrs,
-                         List<SuffixTier> tiers) {
+                         List<AttributeRuleConfig> attrs) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
             this.chanceModel = cm;
@@ -176,12 +141,11 @@ public final class UpgradeServerConfig {
             this.exponentialBase = expBase;
             this.chanceOverrides = overrides;
             this.attributes = attrs;
-            this.suffixTiers = tiers;
         }
     }
 
     public static final class AttributeRuleConfig {
-        public final ResourceLocation id; // attribute RL like minecraft:generic.attack_damage
+        public final ResourceLocation id; // attribute RL
         public final boolean enabled;
         public final int weight;
         public final Direction direction;
@@ -223,18 +187,14 @@ public final class UpgradeServerConfig {
             Map<Integer, Double> overrides = parseLevelDoubleMap(CHANCE_OVERRIDES.get(), "chance.overrides");
 
             List<AttributeRuleConfig> attrs = new ArrayList<>();
-            // Include our 5 defaults; you can add more sections by creating more AttributeSection instances.
             attrs.add(ATTACK_DAMAGE.toRuleConfig());
             attrs.add(ATTACK_SPEED.toRuleConfig());
             attrs.add(ARMOR.toRuleConfig());
             attrs.add(ARMOR_TOUGHNESS.toRuleConfig());
             attrs.add(KNOCKBACK_RESISTANCE.toRuleConfig());
 
-            List<SuffixTier> tiers = parseSuffixTiers(NAME_SUFFIX_TIERS.get());
-
             return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
-                    Collections.unmodifiableList(attrs),
-                    Collections.unmodifiableList(tiers));
+                    Collections.unmodifiableList(attrs));
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
             return new Snapshot(
@@ -249,8 +209,7 @@ public final class UpgradeServerConfig {
                             ARMOR.fallback(),
                             ARMOR_TOUGHNESS.fallback(),
                             KNOCKBACK_RESISTANCE.fallback()
-                    ),
-                    parseSuffixTiers(List.of("1-4:#55FFFF", "5-9:#AA00FF", "10-999:#FFAA00"))
+                    )
             );
         }
     }
@@ -276,46 +235,6 @@ public final class UpgradeServerConfig {
             }
         }
         return Collections.unmodifiableMap(out);
-    }
-
-    private static List<SuffixTier> parseSuffixTiers(@Nullable List<? extends String> lines) {
-        List<SuffixTier> out = new ArrayList<>();
-        if (lines == null) return out;
-        for (Object o : lines) {
-            if (!(o instanceof String s)) continue;
-            String t = s.trim();
-            if (t.isEmpty()) continue;
-            // "min-max:#RRGGBB"
-            int dash = t.indexOf('-');
-            int colon = t.indexOf(':');
-            if (dash <= 0 || colon <= dash + 1 || colon >= t.length() - 1) {
-                LOG.error("[UpgradeServerConfig] Invalid nameSuffix tier '{}'", s);
-                continue;
-            }
-            try {
-                int min = Integer.parseInt(t.substring(0, dash).trim());
-                int max = Integer.parseInt(t.substring(dash + 1, colon).trim());
-                String hex = t.substring(colon + 1).trim();
-                if (hex.startsWith("#")) hex = hex.substring(1);
-                int rgb = (int)Long.parseLong(hex, 16);
-                // normalize to 0xRRGGBB
-                rgb &= 0xFFFFFF;
-                out.add(new SuffixTier(min, max, rgb));
-            } catch (Throwable nfe) {
-                LOG.error("[UpgradeServerConfig] Failed parsing suffix tier '{}': {}", s, nfe.toString());
-            }
-        }
-        return out;
-    }
-
-    public static int resolveSuffixColor(int level) {
-        try {
-            List<SuffixTier> tiers = snapshot().suffixTiers;
-            for (SuffixTier t : tiers) {
-                if (t.matches(level)) return t.colorRGB;
-            }
-        } catch (Throwable ignored) {}
-        return 0; // 0 means "no explicit color", caller may fall back
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }
@@ -375,7 +294,6 @@ public final class UpgradeServerConfig {
 
         public AttributeRuleConfig toRuleConfig() {
             try {
-                // Expect e.g. minecraft:generic.attack_damage
                 ResourceLocation id = ResourceLocation.parse(ns + ":" + grp + "." + name);
                 return new AttributeRuleConfig(
                         id,
@@ -406,9 +324,99 @@ public final class UpgradeServerConfig {
         }
     }
 
-    // NeoForge automatically calls our listener if we subscribe in our main mod. Expose a helper.
     public static void onServerConfigReload(ModConfigEvent event) {
-        // Nothing special needed; callers will ask for snapshot() when needed.
         LOG.debug("[UpgradeServerConfig] onServerConfigReload: {}", event.getConfig().getFileName());
+        // No special action; methods read from SPEC live values.
+    }
+
+    // ---- Name color selection ------------------------------------------------------------------
+
+    /**
+     * Returns a ChatFormatting color for displaying the "+N" level suffix.
+     * Driven by general.nameColorRules entries:
+     *  - "A-B=color"  inclusive range
+     *  - "A+=color"   A and above
+     *  - "N=color"    single level
+     *
+     * Valid colors are ChatFormatting names, e.g. "blue", "light_purple", "gold", etc.
+     * Fallback if no rule matches: WHITE.
+     */
+    public static ChatFormatting nameColorForLevel(int level) {
+        try {
+            List<? extends String> rules = NAME_COLOR_RULES.get();
+            if (rules != null) {
+                for (Object o : rules) {
+                    if (!(o instanceof String s)) continue;
+                    ChatFormatting col = matchColorRule(level, s.trim());
+                    if (col != null) return col;
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[UpgradeServerConfig] nameColorForLevel failed: {}", t.toString());
+        }
+        return ChatFormatting.WHITE;
+    }
+
+    /**
+     * RGB helper for places that want raw color ints (e.g., setting a text style directly).
+     * Uses the same rules as nameColorForLevel.
+     * Returns 0 if no color chosen (caller may apply a default).
+     */
+    public static int resolveSuffixColor(int level) {
+        ChatFormatting f = nameColorForLevel(level);
+        // Convert a few common colors; for others, just return 0 to let caller default.
+        // You can expand this map if you want exact RGB per ChatFormatting.
+        return switch (f) {
+            case BLUE -> 0x5555FF;
+            case LIGHT_PURPLE -> 0xFF55FF;
+            case GOLD -> 0xFFAA00;
+            case AQUA -> 0x55FFFF;
+            case GREEN -> 0x55FF55;
+            case DARK_GREEN -> 0x00AA00;
+            case RED -> 0xFF5555;
+            case WHITE -> 0xFFFFFF;
+            default -> 0; // let caller fall back
+        };
+    }
+
+    private static @Nullable ChatFormatting matchColorRule(int level, String rule) {
+        if (rule.isEmpty() || !rule.contains("=")) return null;
+        String[] parts = rule.split("=", 2);
+        String left = parts[0].trim();
+        String colorName = parts[1].trim();
+
+        ChatFormatting color = ChatFormatting.getByName(colorName);
+        if (color == null) color = ChatFormatting.WHITE;
+
+        // "A-B"
+        int dash = left.indexOf('-');
+        if (dash > 0) {
+            String aStr = left.substring(0, dash).trim();
+            String bStr = left.substring(dash + 1).trim();
+            try {
+                int a = Integer.parseInt(aStr);
+                int b = Integer.parseInt(bStr);
+                if (level >= a && level <= b) return color;
+            } catch (NumberFormatException ignored) {}
+            return null;
+        }
+
+        // "A+"
+        if (left.endsWith("+")) {
+            String aStr = left.substring(0, left.length() - 1).trim();
+            try {
+                int a = Integer.parseInt(aStr);
+                if (level >= a) return color;
+            } catch (NumberFormatException ignored) {}
+            return null;
+        }
+
+        // "N"
+        try {
+            int n = Integer.parseInt(left);
+            if (level == n) return color;
+        } catch (NumberFormatException ignored) {}
+
+        return null;
     }
 }

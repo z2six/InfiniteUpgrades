@@ -5,7 +5,6 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.neoforged.api.distmarker.Dist;
@@ -23,7 +22,7 @@ import java.util.regex.Pattern;
 
 /**
  * Global tooltip enhancer:
- *  - If an item has iu_upgrade data, append a concise "(+X%)" style summary to attribute lines.
+ *  - If an item has iu_upgrade data, append a concise "(+X%)"/"(-X%)" summary to attribute lines.
  *  - If an item has iu_preview=true (our ghost preview), obfuscate only numeric parts.
  *
  * This mirrors the logic used in AngelScreen, but works anywhere the item is hovered (inventory, world, etc.).
@@ -35,6 +34,9 @@ public final class TooltipHooks {
     // Patterns to alter attribute lines
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
+
+    // If a line already has "(+...%)" or "(-...%)", don't append again.
+    private static final Pattern HAS_PERCENT_TAIL = Pattern.compile("\\(\\s*[+\\-]\\s*\\d");
 
     private TooltipHooks() {}
 
@@ -70,12 +72,16 @@ public final class TooltipHooks {
                 // Attribute lines: append the summary if we recognize which attribute it is
                 String attrId = guessAttrId(lower);
                 if (attrId != null) {
-                    String summary = data.summaryFor(attrId);
-                    if (!summary.isEmpty()) {
-                        MutableComponent with = Component.literal(raw)
-                                .append(Component.literal(" " + summary).withStyle(ChatFormatting.DARK_GREEN));
-                        out.add(with);
-                        continue;
+                    // avoid double-appending if some UI already added "(+...%)" or "(-...%)"
+                    if (!HAS_PERCENT_TAIL.matcher(lower).find()) {
+                        String summary = data.summaryFor(attrId); // e.g. "(+25%)" or "(-5%)", "" if none
+                        if (!summary.isEmpty()) {
+                            ChatFormatting col = summary.contains("-") ? ChatFormatting.RED : ChatFormatting.DARK_GREEN;
+                            // preserve original formatting by appending to a copy of the existing component
+                            MutableComponent with = line.copy().append(Component.literal(" " + summary).withStyle(col));
+                            out.add(with);
+                            continue;
+                        }
                     }
                 }
 

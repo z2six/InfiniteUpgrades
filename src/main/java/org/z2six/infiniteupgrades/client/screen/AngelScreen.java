@@ -1,4 +1,3 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelScreen.java
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
@@ -117,7 +116,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         }
 
         if (interceptPreview) {
-            // Prevent super.render from drawing vanilla tooltip for PREVIEW
+            // Prevent super.render from drawing vanilla tooltip for PREVIEW *this frame only*.
             this.hoveredSlot = null;
             LOG.debug("[AngelScreen] Intercepting tooltip for preview in slot 2");
         }
@@ -125,12 +124,10 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // Draw everything (slots/items/widgets)
         super.render(gg, mouseX, mouseY, partialTick);
 
-        // Restore hovered slot BEFORE we draw any tooltip
-        if (interceptPreview) this.hoveredSlot = hoveredBefore;
-
         if (interceptPreview) {
-            // Build modified tooltip for PREVIEW stack
-            ItemStack stack = this.menu.getSlot(2).getItem();
+            // NOTE: DO NOT restore hoveredSlot here (this was causing the tooltip to get "stuck").
+            // Build modified tooltip for PREVIEW using the stack we captured at frame-start.
+            ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
 
@@ -138,7 +135,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
                     .map(Component::getVisualOrderText)
                     .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
-        } else if (augmentReal) {
+        } else if (augmentReal && hoveredBefore != null && hoveredBefore.hasItem()) {
             // Augment any real item’s tooltip inside our GUI (including output after infusion)
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
