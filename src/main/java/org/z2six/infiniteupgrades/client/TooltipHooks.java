@@ -1,187 +1,288 @@
+// MainFile: src/main/java/org/z2six/infiniteupgrades/client/TooltipHooks.java
 package org.z2six.infiniteupgrades.client;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.component.DataComponents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.CustomData;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.logic.UpgradeData;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.text.DecimalFormat;
+import java.util.*;
 
 /**
- * Global tooltip enhancer:
- *  - If an item has iu_upgrade data, append a concise "(+X%)"/"(-X%)" summary to attribute lines.
- *  - If an item has iu_preview=true (our ghost preview), obfuscate only numeric parts.
+ * TooltipHooks – client-side tooltip augmentation for InfiniteUpgrades.
  *
- * This mirrors the logic used in AngelScreen, but works anywhere the item is hovered (inventory, world, etc.).
+ * Dynamically appends an accumulated "(+X%)" (or "(-X%)") after any attribute line shown in the tooltip,
+ * vanilla or modded. It composes per-attribute upgrade factors from server-authored NBT:
+ *
+ *    components.minecraft:custom_data.iu_upgrade.history[*]
+ *      - attribute: string id, e.g. "minecraft:generic.attack_damage" (modded supported)
+ *      - stepPercent: double (e.g., +0.05 for +5%)  [preferred]
+ *      - old/new: doubles; if stepPercent missing, use new/old factor (fallback)
+ *      - op: "ADD_VALUE" (informational here)
+ *
+ * The code resolves each attribute id via the registry to obtain a localized display name,
+ * then appends the computed "(+X%)" to that attribute's line in the tooltip.
+ *
+ * Defensive: if anything is missing or invalid, we skip and log at DEBUG. Never crashes.
+ *
+ * NOTE: This class is registered programmatically in ClientSetup (NeoForge.EVENT_BUS.addListener),
+ * so there are no subscriber annotations here (keeps 1.21.1 clean of deprecation warnings).
  */
-@EventBusSubscriber(value = Dist.CLIENT, modid = "infiniteupgrades")
 public final class TooltipHooks {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // Patterns to alter attribute lines
-    private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
-    private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
+    // NBT layout (matches your live items):
+    private static final String ROOT_UPGRADE_TAG = "iu_upgrade";
+    private static final String HISTORY_TAG      = "history";
+    private static final String ATTR_KEY         = "attribute";
+    private static final String STEP_PCT_KEY     = "stepPercent";
+    private static final String OLD_KEY          = "old";
+    private static final String NEW_KEY          = "new";
 
-    // If a line already has "(+...%)" or "(-...%)", don't append again.
-    private static final Pattern HAS_PERCENT_TAIL = Pattern.compile("\\(\\s*[+\\-]\\s*\\d");
+    // Formatting
+    private static final DecimalFormat PCT_FMT;
+    static {
+        DecimalFormat f = new DecimalFormat("#.#"); // 0 or 1 decimal
+        f.setMaximumFractionDigits(1);
+        PCT_FMT = f;
+    }
 
     private TooltipHooks() {}
 
-    @SubscribeEvent
-    public static void onTooltip(ItemTooltipEvent evt) {
+    // Registered via NeoForge.EVENT_BUS.addListener(TooltipHooks::onTooltip)
+    public static void onTooltip(ItemTooltipEvent event) {
         try {
-            ItemStack stack = evt.getItemStack();
-            if (stack == null || stack.isEmpty()) return;
+            final ItemStack stack = event.getItemStack();
+            final List<Component> tooltip = event.getToolTip();
+            final TooltipFlag flag = event.getFlags();
 
-            // Detect preview ghosts (iu_preview) — obfuscate numeric parts only.
-            if (isPreview(stack)) {
-                List<Component> vanilla = evt.getToolTip();
-                List<Component> modified = obfuscateNumericPartsInCombatLines(vanilla);
-                // Replace the list in-place (preserving header line etc.)
-                vanilla.clear();
-                vanilla.addAll(modified);
+            if (stack == null || stack.isEmpty() || tooltip == null || tooltip.isEmpty()) {
+                debug("Skip tooltip: empty context");
                 return;
             }
 
-            // For real items: show summaries from iu_upgrade (if present).
-            UpgradeData data = UpgradeData.read(stack);
-            if (data.level() <= 0 && data.getEntriesView().isEmpty()) {
-                return; // nothing to add
+            // 1) Build map: attribute-id -> compounded percent (Double)
+            final Map<String, Double> pctByAttrId = computeAllAttributePercents(stack);
+            if (pctByAttrId.isEmpty()) {
+                debug("No IU % available for this stack (no/invalid iu_upgrade history).");
+                return;
             }
 
-            List<Component> tip = evt.getToolTip();
-            List<Component> out = new ArrayList<>(tip.size());
+            // 2) Resolve registry & localized names for attributes we have data for
+            final RegistryAccess access = resolveRegistryAccess(event);
+            final Registry<Attribute> attrReg = (access != null) ? access.registryOrThrow(Registries.ATTRIBUTE) : null;
 
-            for (Component line : tip) {
-                String raw = line.getString();
-                String lower = raw.toLowerCase(Locale.ROOT);
+            // Map: lowercase localized name -> percent, plus a few safe fallbacks by id/path words
+            final Map<String, Double> nameToPct = new LinkedHashMap<>();
+            for (Map.Entry<String, Double> e : pctByAttrId.entrySet()) {
+                final String idStr = e.getKey();
+                final Double pct = e.getValue();
+                if (pct == null) continue;
 
-                // Attribute lines: append the summary if we recognize which attribute it is
-                String attrId = guessAttrId(lower);
-                if (attrId != null) {
-                    // avoid double-appending if some UI already added "(+...%)" or "(-...%)"
-                    if (!HAS_PERCENT_TAIL.matcher(lower).find()) {
-                        String summary = data.summaryFor(attrId); // e.g. "(+25%)" or "(-5%)", "" if none
-                        if (!summary.isEmpty()) {
-                            ChatFormatting col = summary.contains("-") ? ChatFormatting.RED : ChatFormatting.DARK_GREEN;
-                            // preserve original formatting by appending to a copy of the existing component
-                            MutableComponent with = line.copy().append(Component.literal(" " + summary).withStyle(col));
-                            out.add(with);
-                            continue;
+                boolean added = false;
+                try {
+                    if (attrReg != null) {
+                        ResourceLocation rl = ResourceLocation.tryParse(idStr);
+                        if (rl != null && attrReg.containsKey(rl)) {
+                            Attribute attr = attrReg.get(rl);
+                            if (attr != null) {
+                                // attribute.getDescriptionId() -> translation key "attribute.name.*"
+                                String display = Component.translatable(attr.getDescriptionId()).getString();
+                                if (display != null && !display.isBlank()) {
+                                    nameToPct.put(display.toLowerCase(Locale.ROOT), pct);
+                                    added = true;
+                                }
+                            }
                         }
+                    }
+                } catch (Throwable t) {
+                    debug("Registry resolution failed for {}: {}", idStr, t.toString());
+                }
+
+                // Fallbacks (helpful for odd/custom attributes or if registry not ready):
+                if (!added) {
+                    // humanized path e.g. "generic.attack_damage" -> "attack damage"
+                    String human = humanizeId(idStr);
+                    if (!human.isBlank()) {
+                        nameToPct.putIfAbsent(human, pct);
+                    }
+                }
+            }
+
+            if (nameToPct.isEmpty()) {
+                debug("No resolvable attribute display names; leaving tooltip unchanged.");
+                return;
+            }
+
+            // 3) Append "(+X%)" to any tooltip line whose text contains a known attribute display name
+            int appendedCount = 0;
+            for (int i = 0; i < tooltip.size(); i++) {
+                final Component line = tooltip.get(i);
+                final String plain = line.getString().toLowerCase(Locale.ROOT);
+
+                // Find the best matching attribute name contained in this line
+                String matched = null;
+                Double pct = null;
+                for (Map.Entry<String, Double> e : nameToPct.entrySet()) {
+                    final String needle = e.getKey();
+                    if (!needle.isEmpty() && plain.contains(needle)) {
+                        matched = needle;
+                        pct = e.getValue();
+                        break;
+                    }
+                }
+                if (matched == null || pct == null) continue;
+
+                // Skip near-zero to reduce clutter
+                if (Math.abs(pct) < 0.0001) continue;
+
+                final String pctText = (pct >= 0 ? "(+" : "(") + trimZeros(pct) + "%)";
+                final ChatFormatting color = pct > 0.0001 ? ChatFormatting.GREEN
+                        : pct < -0.0001 ? ChatFormatting.RED
+                        : ChatFormatting.GRAY;
+
+                tooltip.set(i, line.copy().append(Component.literal(" " + pctText).withStyle(color)));
+                appendedCount++;
+            }
+
+            debug("Appended % to {} tooltip line(s).", appendedCount);
+        } catch (Throwable t) {
+            // Never crash tooltips – log and continue.
+            LOG.error("[InfiniteUpgrades] Tooltip augmentation failed (defensive skip).", t);
+        }
+    }
+
+    /**
+     * Builds a map of attribute-id -> compounded percent from iu_upgrade.history.
+     * Uses stepPercent when present; else falls back to new/old.
+     */
+    private static Map<String, Double> computeAllAttributePercents(ItemStack stack) {
+        final Map<String, Double> result = new LinkedHashMap<>();
+        try {
+            if (!stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) return result;
+
+            final CustomData cd = stack.getOrDefault(
+                    net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+                    CustomData.EMPTY
+            );
+            if (cd == CustomData.EMPTY) return result;
+
+            final net.minecraft.nbt.CompoundTag root = cd.copyTag();
+            if (root == null || !root.contains(ROOT_UPGRADE_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)) return result;
+
+            final net.minecraft.nbt.CompoundTag iu = root.getCompound(ROOT_UPGRADE_TAG);
+            if (!iu.contains(HISTORY_TAG, net.minecraft.nbt.Tag.TAG_LIST)) return result;
+
+            final net.minecraft.nbt.ListTag history = iu.getList(HISTORY_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND);
+            if (history.isEmpty()) return result;
+
+            // Accumulate per-attribute multiplicative factor
+            final Map<String, Double> factorByAttr = new LinkedHashMap<>();
+            final Map<String, Integer> countedByAttr = new LinkedHashMap<>();
+
+            for (int i = 0; i < history.size(); i++) {
+                final net.minecraft.nbt.CompoundTag step = history.getCompound(i);
+                final String attrId = step.getString(ATTR_KEY);
+                if (attrId == null || attrId.isBlank()) continue;
+
+                double stepFactor = 1.0;
+                boolean used = false;
+
+                if (step.contains(STEP_PCT_KEY, net.minecraft.nbt.Tag.TAG_DOUBLE)) {
+                    final double p = step.getDouble(STEP_PCT_KEY); // e.g., 0.05
+                    stepFactor = 1.0 + p;
+                    used = true;
+                } else if (step.contains(OLD_KEY, net.minecraft.nbt.Tag.TAG_DOUBLE) &&
+                        step.contains(NEW_KEY, net.minecraft.nbt.Tag.TAG_DOUBLE)) {
+                    final double oldV = safeDouble(step, OLD_KEY);
+                    final double newV = safeDouble(step, NEW_KEY);
+                    if (oldV != 0.0) {
+                        stepFactor = newV / oldV;
+                        used = true;
                     }
                 }
 
-                // default: keep the line
-                out.add(line);
+                if (!used) continue;
+
+                factorByAttr.merge(attrId, stepFactor, (a, b) -> a * b);
+                countedByAttr.merge(attrId, 1, Integer::sum);
             }
 
-            tip.clear();
-            tip.addAll(out);
+            // Convert factors to percents
+            for (Map.Entry<String, Double> e : factorByAttr.entrySet()) {
+                final String id = e.getKey();
+                final double factor = e.getValue();
+                final int count = countedByAttr.getOrDefault(id, 0);
+                if (count == 0) continue;
 
+                final double pct = (factor - 1.0) * 100.0;
+                result.put(id, pct);
+            }
         } catch (Throwable t) {
-            LOG.error("[TooltipHooks] onTooltip failed: {}", t.toString());
-        }
-    }
-
-    // -------------- helpers --------------
-
-    private static boolean isPreview(ItemStack stack) {
-        try {
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return false;
-            return cd.copyTag().getBoolean("iu_preview");
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    /** Try to map a tooltip attribute line to an attribute id we track. */
-    private static String guessAttrId(String lowerLine) {
-        // Order matters; simple heuristics for vanilla attributes:
-        if (lowerLine.contains("attack damage"))         return "minecraft:generic.attack_damage";
-        if (lowerLine.contains("attack speed"))          return "minecraft:generic.attack_speed";
-        if (lowerLine.contains("armor toughness"))       return "minecraft:generic.armor_toughness";
-        // Guard against "armor trim"
-        if (lowerLine.contains(" armor") && !lowerLine.contains("armor trim")) return "minecraft:generic.armor";
-        if (lowerLine.contains("knockback resistance"))  return "minecraft:generic.knockback_resistance";
-        return null;
-    }
-
-    private static List<Component> obfuscateNumericPartsInCombatLines(List<Component> vanilla) {
-        List<Component> out = new ArrayList<>(vanilla.size());
-        for (Component c : vanilla) {
-            String raw = c.getString();
-            String lower = raw.toLowerCase(Locale.ROOT);
-
-            // Skip equipment-slot headers like "When in Main Hand"
-            if (lower.startsWith("when ")) {
-                out.add(c);
-                continue;
-            }
-
-            boolean isCombatLine =
-                    lower.contains("attack damage") ||
-                            lower.contains("attack speed")  ||
-                            lower.contains("armor toughness") ||
-                            (lower.contains(" armor") && !lower.contains("armor trim")) ||
-                            lower.contains("knockback resistance");
-
-            if (!isCombatLine) {
-                out.add(c);
-                continue;
-            }
-
-            Matcher m = LEADING_NUM.matcher(raw);
-            if (!m.find()) {
-                out.add(obfuscateBracketsOnly(raw));
-                continue;
-            }
-
-            String num = m.group(1);
-            String rest = m.group(2);
-
-            MutableComponent rebuilt = Component.literal("")
-                    .append(Component.literal(num).withStyle(ChatFormatting.OBFUSCATED))
-                    .append(Component.literal(" "))
-                    .append(obfuscateBracketSegments(rest));
-            out.add(rebuilt);
-        }
-        return out;
-    }
-
-    private static MutableComponent obfuscateBracketSegments(String text) {
-        MutableComponent result = Component.literal("");
-        int idx = 0;
-        Matcher bm = BRACKETS.matcher(text);
-        while (bm.find()) {
-            if (bm.start() > idx) {
-                result = result.append(Component.literal(text.substring(idx, bm.start())));
-            }
-            String seg = text.substring(bm.start(), bm.end());
-            result = result.append(Component.literal(seg).withStyle(ChatFormatting.OBFUSCATED));
-            idx = bm.end();
-        }
-        if (idx < text.length()) {
-            result = result.append(Component.literal(text.substring(idx)));
+            debug("computeAllAttributePercents failed: {}", t.toString());
         }
         return result;
     }
 
-    private static MutableComponent obfuscateBracketsOnly(String text) {
-        return obfuscateBracketSegments(text);
+    private static double safeDouble(net.minecraft.nbt.CompoundTag tag, String key) {
+        try { return tag.getDouble(key); } catch (Throwable ignored) { return 0.0; }
+    }
+
+    /**
+     * Resolve a usable RegistryAccess for attribute name translation.
+     */
+    @Nullable
+    private static RegistryAccess resolveRegistryAccess(ItemTooltipEvent event) {
+        try {
+            if (event.getEntity() != null) {
+                return event.getEntity().level().registryAccess();
+            }
+        } catch (Throwable ignored) {}
+        try {
+            if (Minecraft.getInstance() != null && Minecraft.getInstance().level != null) {
+                return Minecraft.getInstance().level.registryAccess();
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /**
+     * Fallback: turn an id like "namespace:generic.attack_speed" into "attack speed".
+     */
+    private static String humanizeId(String id) {
+        try {
+            String s = id;
+            int colon = s.indexOf(':');
+            if (colon >= 0) s = s.substring(colon + 1); // drop namespace
+            s = s.replace('_', ' ').replace('.', ' ').trim();
+            return s.toLowerCase(Locale.ROOT);
+        } catch (Throwable ignored) {
+            return id.toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private static String trimZeros(double pct) {
+        String s = PCT_FMT.format(pct);
+        s = s.replace(',', '.');
+        if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
+        return s;
+    }
+
+    private static void debug(String msg, Object... args) {
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("[InfiniteUpgrades][Tooltip] " + msg, args);
+        }
     }
 }
