@@ -24,16 +24,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * // MainFile: AngelScreen.java
  * Renders the custom Angel container GUI and tooltips.
  * PNG is 512x512, but we only draw the top-left 274x166 region.
  *
- * Behavior:
- *  - No progress bar.
- *  - For the OUTPUT slot (index 2):
- *      * If it holds a GHOST preview (iu_preview=true), obfuscate only the numeric parts.
- *      * If it holds a REAL result (no iu_preview), let vanilla tooltip render normally.
- *  - "Infuse" button calls menu.onInfuseButtonPressed() (server-side).
+ * Tooltips:
+ *  - We only intercept slot 2 when it holds a GHOST preview (iu_preview=true).
+ *  - Otherwise we ALWAYS call vanilla renderTooltip so every other slot shows normal tooltips.
+ *
+ * Button:
+ *  - "Infuse" sends a menu button click (server receives in AngelMenu.clickMenuButton).
  */
 public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     private static final Logger LOG = LogUtils.getLogger();
@@ -68,7 +67,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         LOG.debug("[AngelScreen] init at {},{}", leftPos, topPos);
 
         // Add a simple "Infuse" button (server action)
-        int bx = leftPos + 176 + 8; // in the right panel area; tweak as you like
+        int bx = leftPos + 176 + 8; // tweak position as needed
         int by = topPos + 18;
         infuseBtn = Button.builder(Component.literal("Infuse"), b -> {
             try {
@@ -76,7 +75,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
                     LOG.info("[AngelScreen] INFUSE click -> sending button {} for container {}", AngelMenu.BUTTON_INFUSE, this.menu.containerId);
                     this.minecraft.gameMode.handleInventoryButtonClick(this.menu.containerId, AngelMenu.BUTTON_INFUSE);
                 } else {
-                    LOG.warn("[AngelScreen] INFUSE click but gameMode is null (client not ready?)");
+                    LOG.warn("[AngelScreen] INFUSE click but gameMode is null");
                 }
             } catch (Throwable t) {
                 LOG.error("[AngelScreen] Infuse click failed", t);
@@ -107,7 +106,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // Draw everything else (slots, item stacks, widgets)
         super.render(gg, mouseX, mouseY, partialTick);
 
-        // VERY IMPORTANT: restore hoveredSlot so other tooltips keep working
+        // Restore hovered slot BEFORE we draw any tooltip
         if (intercept) {
             this.hoveredSlot = prevHovered;
         }
@@ -129,6 +128,9 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
 
             // Render adjusted tooltip
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
+        } else {
+            // Not intercepting: ALWAYS let vanilla draw tooltips for hovered items
+            this.renderTooltip(gg, mouseX, mouseY);
         }
     }
 
@@ -136,9 +138,9 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
         // Only blit the top-left 274x166 of the 512x512 texture
         gg.blit(BG, leftPos, topPos,
-                0, 0,                    // source U,V
-                imageWidth, imageHeight, // width/height to draw
-                512, 512);               // full texture size
+                0, 0,
+                imageWidth, imageHeight,
+                512, 512);
         // (No progress bar)
     }
 
@@ -147,7 +149,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // no labels for now
     }
 
-    // ---- Tooltip post-processing ---------------------------------------------------------------
+    // ---- Tooltip post-processing (preview only) -----------------------------------------------
 
     /** Only used for the PREVIEW ghost. */
     private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
@@ -203,16 +205,13 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         int idx = 0;
         Matcher bm = BRACKETS.matcher(text);
         while (bm.find()) {
-            // Plain text before the bracket
             if (bm.start() > idx) {
                 result = result.append(Component.literal(text.substring(idx, bm.start())));
             }
-            // The full bracketed segment, obfuscated (including the brackets)
             String seg = text.substring(bm.start(), bm.end());
             result = result.append(Component.literal(seg).withStyle(ChatFormatting.OBFUSCATED));
             idx = bm.end();
         }
-        // Trailing text after the last bracket
         if (idx < text.length()) {
             result = result.append(Component.literal(text.substring(idx)));
         }

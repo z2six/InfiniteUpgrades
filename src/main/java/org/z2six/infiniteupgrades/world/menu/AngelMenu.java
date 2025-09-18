@@ -32,24 +32,23 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * // MainFile: AngelMenu.java
- * Angel menu with client-only preview in output slot (index 2).
- * - Slot 0: weapon/armor (filtered by combat attributes/classes)
- * - Slot 1: resource (iron ingot for now)
- * - Slot 2: OUTPUT/PREVIEW
- *      * When showing a ghost preview: cannot be taken.
- *      * When an infusion succeeds: holds the REAL result and can be picked up.
+ * Angel menu:
+ *  - Slot 0: input combat item
+ *  - Slot 1: resource (iron ingot)
+ *  - Slot 2: OUTPUT/PREVIEW
+ *      * Ghost preview while no real result is present.
+ *      * Holds REAL infused result on success; user can take it.
  *
- * Tweaks:
- * - Expose slot coordinates as constants so you can align to your PNG.
- * - Return items to player on close (including a real result in slot 2).
- * - Never overwrite a real result with a ghost preview; only preview when no real result is present.
+ * Important:
+ *  - We do NOT track a client/server flag for "resultReady".
+ *    Instead, we derive it from the actual content of slot 2:
+ *      hasRealResult() = slot2 not empty && !isPreview(slot2)
+ *    That way client will never overwrite a real result with a ghost.
  */
 public class AngelMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
 
     // ---------------- Slot coordinates (GUI-relative) ----------------
-    // Tweak these to match the art you placed in AngelScreen (PNG).
     public static final int INPUT1_X = 27;
     public static final int INPUT1_Y = 47;
 
@@ -64,6 +63,9 @@ public class AngelMenu extends AbstractContainerMenu {
     private static final int PLAYER_INV_Y = 84;
     private static final int HOTBAR_Y     = 142;
 
+    // Button ids
+    public static final int BUTTON_INFUSE = 0;
+
     // Consider these as "combat attributes" for filtering & scaling
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
             Attributes.ATTACK_DAMAGE,
@@ -76,23 +78,21 @@ public class AngelMenu extends AbstractContainerMenu {
     // Detect trailing " +N" in a name (space-plus-number at end)
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
-    // Reentrancy guard: prevent preview writes from recalling slotsChanged -> updatePreview -> ...
+    // Prevent recursive preview recomputation while we programmatically write slot 2
     private boolean suppressPreviewUpdate = false;
-
-    // If true, slot 2 contains a REAL, takeable result (not a ghost)
-    private boolean resultReady = false;
 
     // Backing inventory (3 slots) – invokes slotsChanged on edits
     private final Container baseInv = new SimpleContainer(3) {
         @Override public void setChanged() {
             super.setChanged();
             if (suppressPreviewUpdate) return;
-            try { AngelMenu.this.slotsChanged(this); }
-            catch (Throwable t) { LOG.error("[AngelMenu] slotsChanged dispatch failed: {}", t.toString()); }
+            try {
+                AngelMenu.this.slotsChanged(this);
+            } catch (Throwable t) {
+                LOG.error("[AngelMenu] slotsChanged dispatch failed: {}", t.toString());
+            }
         }
     };
-
-    public static final int BUTTON_INFUSE = 0;
 
     // Cached preview chance (permille). Client-only display for now.
     private int previewChancePermille = 0;
@@ -111,14 +111,17 @@ public class AngelMenu extends AbstractContainerMenu {
             // Output (preview/result)
             this.addSlot(new Slot(baseInv, 2, OUTPUT_X, OUTPUT_Y) {
                 @Override public boolean mayPlace(ItemStack stack) { return false; }
-                @Override public boolean mayPickup(Player player) { return resultReady; }
+                @Override public boolean mayPickup(Player player) {
+                    boolean real = hasRealResult();
+                    LOG.debug("[AngelMenu] mayPickup slot2? realResult={}", real);
+                    return real;
+                }
                 @Override public void onTake(Player player, ItemStack stack) {
                     super.onTake(player, stack);
-                    // user took the real result; clear slot, reset flag, recompute preview
-                    LOG.debug("[AngelMenu] Player took infused result from output slot");
+                    LOG.info("[AngelMenu] Player took infused result from output slot");
                     withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
-                    resultReady = false;
-                    AngelMenu.this.broadcastChanges();
+                    // After taking, recompute ghost preview if inputs still valid
+                    syncToClient("onTake result");
                     updatePreview();
                 }
             });
@@ -153,35 +156,40 @@ public class AngelMenu extends AbstractContainerMenu {
     @Override
     public void slotsChanged(Container container) {
         super.slotsChanged(container);
+        LOG.debug("[AngelMenu] slotsChanged: in={}, res={}, out={}, realOut={}",
+                baseInv.getItem(0), baseInv.getItem(1), baseInv.getItem(2), hasRealResult());
         updatePreview();
     }
+
+    /** Expose preview chance for HUD text if needed later. */
+    public int getPreviewChancePermille() { return previewChancePermille; }
+
+    /** Client-only nudge to recompute the ghost preview. */
+    public void clientRecomputePreview() {
+        updatePreview();
+    }
+
+    // ---- Buttons (server) ----------------------------------------------------------------------
 
     @Override
     public boolean clickMenuButton(Player player, int id) {
         LOG.info("[AngelMenu] clickMenuButton id={} (serverSide={})", id, player != null && !player.level().isClientSide);
         if (id == BUTTON_INFUSE) {
-            onInfuseButtonPressed(player); // <— runs server-side logic
+            onInfuseButtonPressed(player);
             return true;
         }
         return super.clickMenuButton(player, id);
     }
 
-    /** Public accessor for the screen HUD text. */
-    public int getPreviewChancePermille() { return previewChancePermille; }
-
-    /** Called by the client screen when it detects inputs changed locally; recomputes the ghost output. */
-    public void clientRecomputePreview() {
-        updatePreview();
-    }
-
-    // ---- Button: "Infuse" (server) ------------------------------------------------------------
-
-    /** Called from AngelScreen on button click. Runs only on the server. */
+    /** Called from server via clickMenuButton. */
     public void onInfuseButtonPressed(Player player) {
         try {
-            if (player == null || player.level().isClientSide) return;
+            if (player == null || player.level().isClientSide) {
+                LOG.warn("[AngelMenu] onInfuseButtonPressed ignored (player null or client-side)");
+                return;
+            }
 
-            ItemStack in = baseInv.getItem(0);
+            ItemStack in  = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);
 
             // Validate inputs
@@ -194,11 +202,8 @@ public class AngelMenu extends AbstractContainerMenu {
                 return;
             }
 
-            // Determine current level & chance
             int cur = parseBaseNameAndLevel(in.getHoverName()).getSecond();
             double chance = UpgradeService.getSuccessChance(cur);
-
-            // Roll
             boolean success = player.getRandom().nextDouble() < chance;
 
             // Always consume one resource on attempt
@@ -206,31 +211,23 @@ public class AngelMenu extends AbstractContainerMenu {
             baseInv.setItem(1, res);
 
             if (success) {
-                // Perform upgrade (server-side)
-                UpgradeService.Result result = UpgradeService.tryUpgrade(in, player.getRandom());
-                ItemStack upgraded = result.upgraded();
+                UpgradeService.Result r = UpgradeService.tryUpgrade(in, player.getRandom());
+                ItemStack upgraded = r.upgraded();
+                clearPreviewTags(upgraded); // ensure not marked as preview
 
-                // Ensure it's a REAL result (strip preview tags)
-                clearPreviewTags(upgraded);
-
-                // Put result into OUTPUT slot, mark takeable
+                LOG.info("[AngelMenu] Infuse SUCCESS at L{} -> placing result into output", cur);
                 withPreviewSuppressed(() -> {
-                    baseInv.setItem(0, ItemStack.EMPTY); // consume input
-                    baseInv.setItem(2, upgraded);        // show result to take
+                    baseInv.setItem(0, ItemStack.EMPTY); // consume the input item on success
+                    baseInv.setItem(2, upgraded);        // put real result into output
                 });
-                resultReady = true;
-                LOG.info("[AngelMenu] Infuse SUCCESS -> placed real result in output; lvl {}->{}", cur, cur + 1);
+                // DO NOT recompute preview; show the real result
+                syncToClient("infuse success");
             } else {
-                // Failure: leave the input intact, just consumed the resource
-                LOG.info("[AngelMenu] Infuse FAILED at level {}", cur);
+                LOG.info("[AngelMenu] Infuse FAILED at L{}", cur);
+                // We only consumed resource. Keep input. Recompute ghost preview if still valid.
+                syncToClient("infuse fail");
+                updatePreview();
             }
-
-            // Sync to client
-            this.broadcastChanges();
-
-            // Recompute preview only if there is no real result blocking the output
-            if (!resultReady) updatePreview();
-
         } catch (Throwable t) {
             LOG.error("[AngelMenu] onInfuseButtonPressed failed: {}", t.toString());
         }
@@ -245,18 +242,18 @@ public class AngelMenu extends AbstractContainerMenu {
             Slot slot = this.slots.get(index);
             if (slot == null || !slot.hasItem()) return empty;
 
-            // Don't allow quick-move from a ghost preview
-            if (index == 2 && !resultReady) return ItemStack.EMPTY;
-
-            ItemStack stack = slot.getItem();
-            ItemStack copy = stack.copy();
-
             // From OUTPUT (real result) -> player inventory
             if (index == 2) {
+                if (!hasRealResult()) return ItemStack.EMPTY; // don't quick-move ghosts
+                ItemStack stack = slot.getItem();
+                ItemStack copy = stack.copy();
                 if (!this.moveItemStackTo(stack, 3, 39, false)) return ItemStack.EMPTY;
                 slot.onTake(player, stack);
                 return copy;
             }
+
+            ItemStack stack = slot.getItem();
+            ItemStack copy = stack.copy();
 
             // From player inventory -> inputs
             if (index >= 3) {
@@ -303,7 +300,6 @@ public class AngelMenu extends AbstractContainerMenu {
 
             // Return everything else (including a REAL result if present)
             this.clearContainer(player, baseInv);
-            resultReady = false;
             LOG.debug("[AngelMenu] Menu closed; returned items to {}", player != null ? player.getName().getString() : "null-player");
         } catch (Throwable t) {
             LOG.error("[AngelMenu] removed() failed to clear/return items: {}", t.toString());
@@ -316,7 +312,10 @@ public class AngelMenu extends AbstractContainerMenu {
     private void updatePreview() {
         try {
             // If we’re currently showing a REAL result, do not clobber it with a ghost
-            if (resultReady) return;
+            if (hasRealResult()) {
+                LOG.debug("[AngelMenu] updatePreview skipped (real result present)");
+                return;
+            }
 
             ItemStack in = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);
@@ -405,7 +404,6 @@ public class AngelMenu extends AbstractContainerMenu {
 
             // Put the ghost into the output slot
             withPreviewSuppressed(() -> baseInv.setItem(2, preview));
-
         } catch (Throwable t) {
             LOG.error("[AngelMenu] updatePreview failed: {}", t.toString());
             withPreviewSuppressed(() -> {
@@ -422,7 +420,25 @@ public class AngelMenu extends AbstractContainerMenu {
         try { r.run(); } finally { suppressPreviewUpdate = prev; }
     }
 
+    private void syncToClient(String reason) {
+        try {
+            LOG.debug("[AngelMenu] syncToClient: {}", reason);
+            this.broadcastChanges();
+            try {
+                // In case full resync is needed on your 1.21 environment
+                this.sendAllDataToRemote();
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            LOG.error("[AngelMenu] syncToClient failed: {}", t.toString());
+        }
+    }
+
     // ---- Helpers ------------------------------------------------------------------------------
+
+    private boolean hasRealResult() {
+        ItemStack out = baseInv.getItem(2);
+        return !out.isEmpty() && !isPreview(out);
+    }
 
     private static boolean isPreview(ItemStack stack) {
         try {
