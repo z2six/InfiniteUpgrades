@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/registry/ModBlockEntities.java
 package org.z2six.infiniteupgrades.registry;
 
 import com.mojang.logging.LogUtils;
@@ -19,7 +18,12 @@ public final class ModBlockEntities {
 
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<SigilBlockEntity>> SIGIL_BE =
             BLOCK_ENTITIES.register("sigil",
-                    () -> BlockEntityType.Builder.of(SigilBlockEntity::new, Infiniteupgrades.CELESTIAL_SIGIL.get())
+                    // UPDATED: make BE valid for BOTH sigil blocks (celestial + unholy)
+                    () -> BlockEntityType.Builder.of(
+                                    SigilBlockEntity::new,
+                                    Infiniteupgrades.CELESTIAL_SIGIL.get(),
+                                    Infiniteupgrades.UNHOLY_SIGIL.get()
+                            )
                             .build(null));
 
     private ModBlockEntities() {}

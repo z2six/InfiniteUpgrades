@@ -1,5 +1,7 @@
 {
   "itemGroup.infiniteupgrades": "Infinite Upgrades",
   "block.infiniteupgrades.celestial_sigil": "Celestial Sigil",
-  "item.infiniteupgrades.celestial_sigil": "Celestial Sigil"
+  "item.infiniteupgrades.celestial_sigil": "Celestial Sigil",
+  "block.infiniteupgrades.unholy_sigil": "Unholy Sigil",
+  "item.infiniteupgrades.unholy_sigil": "Unholy Sigil"
 }

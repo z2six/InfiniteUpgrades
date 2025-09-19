@@ -1,4 +1,3 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
 package org.z2six.infiniteupgrades;
 
 // NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.
@@ -70,7 +69,7 @@ public class Infiniteupgrades {
                             .displayItems((parameters, output) -> output.accept(EXAMPLE_ITEM.get()))
                             .build());
 
-    // Our Sigil
+    // Our Sigils
     public static final DeferredBlock<Block> CELESTIAL_SIGIL = BLOCKS.register(
             "celestial_sigil",
             () -> new SigilBlock(BlockBehaviour.Properties.of()
@@ -81,6 +80,18 @@ public class Infiniteupgrades {
 
     public static final DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
+
+    // NEW: Unholy Sigil (Step 1) — identical behavior for now; visuals/recipe differ
+    public static final DeferredBlock<Block> UNHOLY_SIGIL = BLOCKS.register(
+            "unholy_sigil",
+            () -> new SigilBlock(BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.NETHER)
+                    .noCollission()
+                    .noOcclusion()
+                    .strength(0.1f)));
+
+    public static final DeferredItem<BlockItem> UNHOLY_SIGIL_ITEM =
+            ITEMS.registerSimpleBlockItem("unholy_sigil", UNHOLY_SIGIL);
 
     // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
@@ -117,6 +128,7 @@ public class Infiniteupgrades {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
                 event.accept(EXAMPLE_BLOCK_ITEM);
                 event.accept(CELESTIAL_SIGIL_ITEM);
+                event.accept(UNHOLY_SIGIL_ITEM); // NEW: show Unholy Sigil in the same tab
                 LOGGER.debug("[Infiniteupgrades] Added items to BUILDING_BLOCKS tab");
             }
         } catch (Throwable t) {
