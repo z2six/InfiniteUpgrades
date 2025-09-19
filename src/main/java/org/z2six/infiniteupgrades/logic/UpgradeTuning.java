@@ -1,4 +1,4 @@
-package org.z2six.infiniteupgrades.tuning;
+package org.z2six.infiniteupgrades.logic;
 
 import java.util.Collections;
 import java.util.Map;

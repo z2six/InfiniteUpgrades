@@ -1,3 +1,5 @@
+// infiniteupgrades/logic/UpgradeData
+
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;

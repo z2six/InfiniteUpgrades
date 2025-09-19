@@ -1,3 +1,5 @@
+// Config.java
+
 package org.z2six.infiniteupgrades;
 
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -7,6 +9,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
+import org.z2six.infiniteupgrades.logic.UpgradeTuning;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -90,8 +93,8 @@ public class Config {
     public static Set<Item> items;
 
     /** Parsed, ready-to-use tuning (thread-safe snapshot). */
-    public static volatile org.z2six.infiniteupgrades.tuning.UpgradeTuning TUNING =
-            org.z2six.infiniteupgrades.tuning.UpgradeTuning.defaults();
+    public static volatile UpgradeTuning TUNING =
+            UpgradeTuning.defaults();
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName
@@ -120,7 +123,7 @@ public class Config {
             Map<Integer, Double> bonus = parseDoubleByLevelMap(BONUS_STEPS.get(), "bonusSteps");
             Map<Integer, Double> overrides = parseDoubleByLevelMap(LEVEL_CHANCE_OVERRIDES.get(), "levelChanceOverrides");
 
-            TUNING = new org.z2six.infiniteupgrades.tuning.UpgradeTuning(
+            TUNING = new UpgradeTuning(
                     start, step, min, stepPct, maxLvl, bonus, overrides
             );
 
