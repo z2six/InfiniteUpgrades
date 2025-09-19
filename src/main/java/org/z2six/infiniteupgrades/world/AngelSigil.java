@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/SigilBlock.java
+// File: src/main/java/org/z2six/infiniteupgrades/world/AngelSigil.java
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
@@ -20,17 +20,17 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
-import org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity;
+import org.z2six.infiniteupgrades.world.blockentity.AngelSigilBlockEntity;
 
 import java.util.List;
 
-public final class SigilBlock extends Block implements EntityBlock {
+public final class AngelSigil extends Block implements EntityBlock {
     private static final Logger LOG = LogUtils.getLogger();
     private static final VoxelShape OUTLINE = Block.box(0, 0, 0, 16, 1, 16);
 
-    public SigilBlock(BlockBehaviour.Properties props) {
+    public AngelSigil(BlockBehaviour.Properties props) {
         super(props);
-        LOG.debug("[SigilBlock] Constructed");
+        LOG.debug("[AngelSigil] Constructed");
     }
 
     @Override
@@ -45,7 +45,7 @@ public final class SigilBlock extends Block implements EntityBlock {
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        return new SigilBlockEntity(pos, state);
+        return new AngelSigilBlockEntity(pos, state);
     }
 
     // Spawn the angel when placed
@@ -59,20 +59,20 @@ public final class SigilBlock extends Block implements EntityBlock {
             AABB box = AABB.unitCubeFromLowerCorner(pos.getCenter()).inflate(1.0);
             List<AngelEntity> existing = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
             if (!existing.isEmpty()) {
-                LOG.debug("[SigilBlock] Angel already exists at {}; skipping spawn", pos);
+                LOG.debug("[AngelSigil] Angel already exists at {}; skipping spawn", pos);
                 return;
             }
 
             AngelEntity angel = ModEntityTypes.ANGEL.get().create(srv);
             if (angel == null) {
-                LOG.error("[SigilBlock] Failed to create AngelEntity at {}", pos);
+                LOG.error("[AngelSigil] Failed to create AngelEntity at {}", pos);
                 return;
             }
             angel.setAnchor(pos);
             srv.addFreshEntityWithPassengers(angel);
-            LOG.info("[SigilBlock] Spawned AngelEntity id={} at {}", angel.getId(), pos);
+            LOG.info("[AngelSigil] Spawned AngelEntity id={} at {}", angel.getId(), pos);
         } catch (Throwable t) {
-            LOG.error("[SigilBlock] setPlacedBy spawn failed at {}: {}", pos, t.toString());
+            LOG.error("[AngelSigil] setPlacedBy spawn failed at {}: {}", pos, t.toString());
         }
     }
 
@@ -86,7 +86,7 @@ public final class SigilBlock extends Block implements EntityBlock {
         try {
             // Drop the two input slots if present
             BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof SigilBlockEntity sbe) {
+            if (be instanceof AngelSigilBlockEntity sbe) {
                 Containers.dropContents(level, pos, sbe.getInventory());
             }
 
@@ -95,10 +95,10 @@ public final class SigilBlock extends Block implements EntityBlock {
             List<AngelEntity> toRemove = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
             for (AngelEntity e : toRemove) {
                 e.discard();
-                LOG.info("[SigilBlock] Removed AngelEntity id={} anchored at {}", e.getId(), pos);
+                LOG.info("[AngelSigil] Removed AngelEntity id={} anchored at {}", e.getId(), pos);
             }
         } catch (Throwable t) {
-            LOG.error("[SigilBlock] onRemove cleanup failed at {}: {}", pos, t.toString());
+            LOG.error("[AngelSigil] onRemove cleanup failed at {}: {}", pos, t.toString());
         }
     }
 }

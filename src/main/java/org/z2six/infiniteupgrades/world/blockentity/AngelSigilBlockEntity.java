@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/world/blockentity/SigilBlockEntity.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/world/blockentity/AngelSigilBlockEntity.java
 package org.z2six.infiniteupgrades.world.blockentity;
 
 import com.mojang.logging.LogUtils;
@@ -21,22 +21,22 @@ import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.world.menu.AngelMenu;
 
 /**
- * // MainFile: SigilBlockEntity.java
+ * // MainFile: AngelSigilBlockEntity.java
  * Holds 2 slots for the angel upgrade ritual.
  * Defensive logging; never crashes.
  */
-public class SigilBlockEntity extends BlockEntity implements net.minecraft.world.MenuProvider {
+public class AngelSigilBlockEntity extends BlockEntity implements net.minecraft.world.MenuProvider {
     private static final Logger LOG = LogUtils.getLogger();
 
     // Two real slots: 0 = combat item, 1 = resource
     private final SimpleContainer inventory = new SimpleContainer(2) {
         @Override public void setChanged() {
             super.setChanged();
-            SigilBlockEntity.this.setChanged();
+            AngelSigilBlockEntity.this.setChanged();
         }
     };
 
-    public SigilBlockEntity(BlockPos pos, BlockState state) {
+    public AngelSigilBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.SIGIL_BE.get(), pos, state);
     }
 

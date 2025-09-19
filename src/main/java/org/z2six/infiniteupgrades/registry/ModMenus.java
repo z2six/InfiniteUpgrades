@@ -10,11 +10,12 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.world.menu.AngelMenu;
+import org.z2six.infiniteupgrades.world.menu.DemonMenu;
 
 /**
  * // MainFile: ModMenus.java
  * Registers container/menu types.
- * Uses client-factory (id, inv, buf) for AngelMenu.
+ * Keeps AngelMenu as-is; adds DemonMenu.
  */
 public final class ModMenus {
     private static final Logger LOG = LogUtils.getLogger();
@@ -22,10 +23,15 @@ public final class ModMenus {
     public static final DeferredRegister<MenuType<?>> MENUS =
             DeferredRegister.create(Registries.MENU, Infiniteupgrades.MODID);
 
+    // Existing Angel menu
     public static final DeferredHolder<MenuType<?>, MenuType<AngelMenu>> ANGEL_MENU =
             MENUS.register("angel_menu",
-                    // Keep the factory that matches AngelMenu's (id, inv, FriendlyByteBuf) constructor.
                     () -> IMenuTypeExtension.create((id, inv, buf) -> new AngelMenu(id, inv, buf)));
+
+    // NEW Demon menu
+    public static final DeferredHolder<MenuType<?>, MenuType<DemonMenu>> DEMON_MENU =
+            MENUS.register("demon_menu",
+                    () -> IMenuTypeExtension.create((id, inv, buf) -> new DemonMenu(id, inv, buf)));
 
     private ModMenus() {}
 

@@ -1,3 +1,4 @@
+// MainFile: src/main/java/org/z2six/infiniteupgrades/config/UpgradeServerConfig.java
 package org.z2six.infiniteupgrades.config;
 
 import com.mojang.logging.LogUtils;
@@ -16,15 +17,27 @@ import java.util.*;
  * Structure:
  * - general:
  *     maxLevel: int
- *     upgradeMode: "RANDOM" | "ALL"
+ *     upgradeMode: "RANDOM" | "ALL"            (deprecated; will be superseded by patron mechanics)
  *     nameColorRules: list of ranges mapping to colors, e.g.
  *         ["1-4=blue","5-9=light_purple","10+=gold"]
+ *
+ *     -- NEW (Batch 1) --
+ *     angelAllMult: double    (multiplier applied to per-step magnitude when acting as ANGEL "apply all")
+ *     demonRandomMult: double (multiplier applied when acting as DEMON "random one")
+ *
+ * - reputation:
+ *     gainPerUpgrade: double  (default 0.1)
+ *     min: int                (default -100)
+ *     max: int                (default +100)
+ *     effectScale: double     (default 1.0; scales the strength of reputation on failure chance)
+ *
  * - chance:
  *     model: "FLAT_DECREMENT" | "EXPONENTIAL"
  *     startChance: double (0..1)
  *     decrementPerLevel: double (0..1)   [for FLAT]
  *     exponentialBase: double (0..1)     [for EXPONENTIAL, e.g. 0.95]
  *     overrides: list of "level=chance"  (applies at current level L for L->L+1)
+ *
  * - attributes: see AttributeSection
  */
 public final class UpgradeServerConfig {
@@ -40,10 +53,21 @@ public final class UpgradeServerConfig {
 
     // general
     public static final ModConfigSpec.IntValue GENERAL_MAX_LEVEL;
+    /** Deprecated: kept for backward compatibility until patron routing is fully wired. */
     public static final ModConfigSpec.EnumValue<UpgradeMode> GENERAL_MODE;
+
+    // NEW: patron multipliers (tuning how strong each path is)
+    public static final ModConfigSpec.DoubleValue GENERAL_ANGEL_ALL_MULT;
+    public static final ModConfigSpec.DoubleValue GENERAL_DEMON_RANDOM_MULT;
 
     // name color rules
     public static final ModConfigSpec.ConfigValue<List<? extends String>> NAME_COLOR_RULES;
+
+    // reputation (new)
+    public static final ModConfigSpec.DoubleValue REP_GAIN_PER_UPGRADE;
+    public static final ModConfigSpec.IntValue REP_MIN;
+    public static final ModConfigSpec.IntValue REP_MAX;
+    public static final ModConfigSpec.DoubleValue REP_EFFECT_SCALE;
 
     // chance
     public static final ModConfigSpec.EnumValue<ChanceModelType> CHANCE_MODEL;
@@ -89,14 +113,32 @@ public final class UpgradeServerConfig {
         B.push("general");
         GENERAL_MAX_LEVEL = B.comment("Maximum enhancement level.")
                 .defineInRange("maxLevel", 20, 0, 1000);
-        GENERAL_MODE = B.comment("Upgrade mode: RANDOM (pick one attribute) or ALL (apply all).")
+
+        GENERAL_MODE = B.comment("(Deprecated) Upgrade mode: RANDOM (pick one attribute) or ALL (apply all). " +
+                        "Kept for backward compatibility; patron (Angel/Demon) will override this later.")
                 .defineEnum("upgradeMode", UpgradeMode.RANDOM);
+
+        GENERAL_ANGEL_ALL_MULT = B.comment("Multiplier applied to per-step magnitude when acting as ANGEL (apply all attributes).")
+                .defineInRange("angelAllMult", 0.25, 0.0, 1000.0);
+        GENERAL_DEMON_RANDOM_MULT = B.comment("Multiplier applied when acting as DEMON (random single attribute).")
+                .defineInRange("demonRandomMult", 1.0, 0.0, 1000.0);
 
         NAME_COLOR_RULES = B.comment("Name color tiers by level. Formats: 'A-B=color', 'A+=color', or 'N=color'.",
                         "Default: [\"1-4=blue\",\"5-9=light_purple\",\"10+=gold\"]")
                 .defineListAllowEmpty("nameColorRules",
                         List.of("1-4=blue", "5-9=light_purple", "10+=gold"),
                         o -> o instanceof String);
+        B.pop();
+
+        B.push("reputation");
+        REP_GAIN_PER_UPGRADE = B.comment("Reputation gained with the acting patron per upgrade attempt (and lost with the opposite).")
+                .defineInRange("gainPerUpgrade", 0.1, -1000.0, 1000.0);
+        REP_MIN = B.comment("Minimum reputation bound.")
+                .defineInRange("min", -100, -1_000_000, 1_000_000);
+        REP_MAX = B.comment("Maximum reputation bound.")
+                .defineInRange("max", 100, -1_000_000, 1_000_000);
+        REP_EFFECT_SCALE = B.comment("Scales the strength of reputation when reducing (or increasing) failure chance. 1.0 = default.")
+                .defineInRange("effectScale", 1.0, 0.0, 1000.0);
         B.pop();
 
         B.push("chance");
@@ -119,8 +161,22 @@ public final class UpgradeServerConfig {
 
     // ---- SNAPSHOT ----
     public static final class Snapshot {
+        // legacy
         public final UpgradeMode upgradeMode;
+
         public final int maxLevel;
+
+        // patron multipliers
+        public final double angelAllMult;
+        public final double demonRandomMult;
+
+        // rep
+        public final double repGainPerUpgrade;
+        public final int repMin;
+        public final int repMax;
+        public final double repEffectScale;
+
+        // chance
         public final ChanceModelType chanceModel;
         public final double startChance;
         public final double decrementPerLevel;
@@ -129,17 +185,30 @@ public final class UpgradeServerConfig {
 
         public final List<AttributeRuleConfig> attributes;
 
-        private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
-                         double start, double dec, double expBase,
-                         Map<Integer, Double> overrides,
-                         List<AttributeRuleConfig> attrs) {
+        private Snapshot(
+                UpgradeMode mode, int maxLevel,
+                double angelAllMult, double demonRandomMult,
+                double repGain, int repMin, int repMax, double repScale,
+                ChanceModelType cm, double start, double dec, double expBase, Map<Integer, Double> overrides,
+                List<AttributeRuleConfig> attrs
+        ) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
+
+            this.angelAllMult = angelAllMult;
+            this.demonRandomMult = demonRandomMult;
+
+            this.repGainPerUpgrade = repGain;
+            this.repMin = repMin;
+            this.repMax = repMax;
+            this.repEffectScale = repScale;
+
             this.chanceModel = cm;
             this.startChance = start;
             this.decrementPerLevel = dec;
             this.exponentialBase = expBase;
             this.chanceOverrides = overrides;
+
             this.attributes = attrs;
         }
     }
@@ -180,6 +249,19 @@ public final class UpgradeServerConfig {
             UpgradeMode mode = GENERAL_MODE.get();
             int maxLvl = GENERAL_MAX_LEVEL.get();
 
+            double angelMult = Math.max(0.0, GENERAL_ANGEL_ALL_MULT.get());
+            double demonMult = Math.max(0.0, GENERAL_DEMON_RANDOM_MULT.get());
+
+            double repGain = REP_GAIN_PER_UPGRADE.get();
+            int repMinV = REP_MIN.get();
+            int repMaxV = REP_MAX.get();
+            if (repMinV > repMaxV) {
+                // auto-correct and warn
+                LOG.error("[UpgradeServerConfig] reputation min({}) > max({}), swapping.", repMinV, repMaxV);
+                int tmp = repMinV; repMinV = repMaxV; repMaxV = tmp;
+            }
+            double repScale = Math.max(0.0, REP_EFFECT_SCALE.get());
+
             ChanceModelType model = CHANCE_MODEL.get();
             double start = clamp01(CHANCE_START.get());
             double dec = clamp01(CHANCE_DECREMENT.get());
@@ -193,13 +275,20 @@ public final class UpgradeServerConfig {
             attrs.add(ARMOR_TOUGHNESS.toRuleConfig());
             attrs.add(KNOCKBACK_RESISTANCE.toRuleConfig());
 
-            return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
-                    Collections.unmodifiableList(attrs));
+            return new Snapshot(
+                    mode, maxLvl,
+                    angelMult, demonMult,
+                    repGain, repMinV, repMaxV, repScale,
+                    model, start, dec, expBase, overrides,
+                    Collections.unmodifiableList(attrs)
+            );
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
             return new Snapshot(
                     UpgradeMode.RANDOM,
                     20,
+                    0.25, 1.0,
+                    0.1, -100, 100, 1.0,
                     ChanceModelType.FLAT_DECREMENT,
                     1.0, 0.05, 0.95,
                     Map.of(1, 1.0, 2, 0.95),

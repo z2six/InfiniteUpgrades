@@ -4,7 +4,6 @@ package org.z2six.infiniteupgrades.world;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -28,6 +27,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
 
 // --- GeckoLib 4.7.x ---
+import org.z2six.infiniteupgrades.world.blockentity.AngelSigilBlockEntity;
 import software.bernie.geckolib.animatable.GeoEntity;
 import software.bernie.geckolib.animatable.instance.AnimatableInstanceCache;
 import software.bernie.geckolib.animation.AnimatableManager.ControllerRegistrar;
@@ -149,7 +149,7 @@ public class AngelEntity extends Mob implements GeoEntity {
                     if (anchor == null || anchor == BlockPos.ZERO) return;
                     BlockState bs = ((ServerLevel) level()).getBlockState(anchor);
                     Block block = bs.getBlock();
-                    if (!(block instanceof org.z2six.infiniteupgrades.world.SigilBlock)) {
+                    if (!(block instanceof AngelSigil)) {
                         LOG.debug("[AngelEntity] Anchor missing at {}; discarding", anchor);
                         this.discard();
                         return;
@@ -174,11 +174,11 @@ public class AngelEntity extends Mob implements GeoEntity {
 
             BlockPos anchor = getAnchor();
             BlockEntity be = level().getBlockEntity(anchor);
-            if (be instanceof org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity sigil) {
+            if (be instanceof AngelSigilBlockEntity sigil) {
                 sp.openMenu(sigil, anchor);
                 return InteractionResult.CONSUME;
             } else {
-                LOG.warn("[AngelEntity] No SigilBlockEntity at {}", anchor);
+                LOG.warn("[AngelEntity] No AngelSigilBlockEntity at {}", anchor);
             }
 
             return InteractionResult.SUCCESS;

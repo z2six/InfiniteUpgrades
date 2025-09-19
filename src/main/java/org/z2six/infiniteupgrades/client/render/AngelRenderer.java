@@ -1,5 +1,5 @@
 // MainFile: src/main/java/org/z2six/infiniteupgrades/client/AngelRenderer.java
-package org.z2six.infiniteupgrades.client;
+package org.z2six.infiniteupgrades.client.render;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;

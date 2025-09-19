@@ -34,21 +34,24 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Minimal, self-contained upgrade engine used by AngelMenu.
+ * Minimal, self-contained upgrade engine used by AngelMenu/DemonMenu.
  *
  * Now enhanced to:
- *  - Use SERVER config (UpgradeServerConfig) for chance logic.
- *  - Persist a full audit trail into the item (CUSTOM_DATA key "iu_upgrade"):
- *      level, history[], and per-attribute totals.
- *  - Apply the colored " +N" suffix to the item's name on successful infusion
- *    using server-configured color tiers.
+ *  - Patron-aware selection:
+ *      * ANGEL => upgrade ALL eligible attributes (smaller step via angelAllMult)
+ *      * DEMON => upgrade ONE random eligible attribute (larger step via demonRandomMult)
+ *  - Reputation-aware failure scaling via getSuccessChanceWithReputation (menu passes rep).
+ *  - Full audit trail (CUSTOM_DATA "iu_upgrade"): level, history[], and per-attribute totals.
+ *  - Colored " +N" suffix on success using server-configured color tiers.
  *
- * Existing preview math in the GUI still reads from Config.TUNING (your older COMMON config)
- * for now, so nothing that worked before is broken. Server authority applies at the moment of
- * actual infusion (this class).
+ * NOTE: GUI preview still uses Config.TUNING for step magnitude; the server-authoritative
+ * application happens here (with patron multipliers).
  */
 public final class UpgradeService {
     private static final Logger LOG = LogUtils.getLogger();
+
+    /** Who performs the upgrade (affects selection + multipliers + reputation externally). */
+    public enum Patron { ANGEL, DEMON }
 
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
@@ -62,10 +65,11 @@ public final class UpgradeService {
 
     private UpgradeService() {}
 
-    // -------------------- Public API used by AngelMenu --------------------
+    // -------------------- Public API used by Menus --------------------
 
     /**
      * Success chance for current level, using SERVER config (authoritative).
+     * Legacy call: does not consider reputation or patron. Preserved for back-compat.
      */
     public static double getSuccessChance(int currentLevel) {
         try {
@@ -95,14 +99,36 @@ public final class UpgradeService {
         }
     }
 
+    /**
+     * Patron + reputation aware success chance.
+     * @param currentLevel current +N
+     * @param patron       ANGEL or DEMON
+     * @param reputation   rep with that patron ([-100..100] typically)
+     */
+    public static double getSuccessChanceWithReputation(int currentLevel, Patron patron, double reputation) {
+        final Snapshot s = UpgradeServerConfig.snapshot();
+
+        double baseSuccess = getSuccessChance(currentLevel);
+        double baseFail = 1.0 - baseSuccess;
+
+        double effFail = applyReputationToFailure(baseFail, reputation, s.repMin, s.repMax, s.repEffectScale, patron);
+        double effSuccess = clamp01(1.0 - effFail);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("[UpgradeService][Chance] patron={} level={} baseSucc={} baseFail={} rep={} effFail={} effSucc={}",
+                    patron, currentLevel,
+                    round3(baseSuccess), round3(baseFail),
+                    round3(reputation), round3(effFail), round3(effSuccess));
+        }
+        return effSuccess;
+    }
+
     /** Result wrapper for upgrades. */
     public static record Result(ItemStack upgraded, boolean success, int newLevel) {}
 
     /**
-     * Perform the actual upgrade.
-     * - Works on a copy of the provided stack (original remains untouched).
-     * - Returns a Result with the upgraded stack, success flag, and new level.
-     * - On success: persists audit data, bumps +N level, and applies colored suffix.
+     * LEGACY path: upgrades ONE random supported attribute (old Angel behavior).
+     * Kept for back-compat; menus should switch to tryUpgradeWithPatron.
      */
     public static Result tryUpgrade(ItemStack original, RandomSource rand) {
         if (original == null || original.isEmpty()) {
@@ -115,7 +141,7 @@ public final class UpgradeService {
         AttributeDelta delta = null;
 
         try {
-            DeltaAndFlag res = upgradeOneRandomSupportedAttribute(copy, rand);
+            DeltaAndFlag res = upgradeOneRandomSupportedAttribute(copy, rand, 1.0 /* no patron multiplier */);
             ok = res.modified;
             delta = res.delta;
         } catch (Throwable t) {
@@ -136,7 +162,7 @@ public final class UpgradeService {
             LOG.error("[UpgradeService] writeAudit failed: {}", t.toString());
         }
 
-        // Apply colored name suffix " +N" (server-configured tiers)
+        // Apply colored name suffix " +N"
         try {
             applyColoredSuffix(copy, newLevel);
         } catch (Throwable t) {
@@ -146,13 +172,128 @@ public final class UpgradeService {
         return new Result(copy, true, newLevel);
     }
 
-    // -------------------- Core logic --------------------
+    /**
+     * NEW patron-aware path:
+     *  - ANGEL: upgrade ALL eligible attributes (step * angelAllMult)
+     *  - DEMON: upgrade ONE random eligible attribute (step * demonRandomMult)
+     *
+     * Always works on a copy. On success, bumps +N by 1, writes audit for each changed attribute,
+     * and applies the colored "+N" suffix.
+     */
+    public static Result tryUpgradeWithPatron(ItemStack original, RandomSource rand, Patron patron) {
+        if (original == null || original.isEmpty()) {
+            return new Result(ItemStack.EMPTY, false, 0);
+        }
+
+        ItemStack copy = original.copy();
+        int currentLevel = parseLevel(copy);
+
+        // Base step from your COMMON tuning (preview consistency), scaled by patron multiplier.
+        double baseStep = Math.max(0.0, Config.TUNING.percentBonusForLevelUp(currentLevel));
+        double effStep = baseStep * patronStepMultiplier(patron);
+
+        List<AttributeDelta> deltas = new ArrayList<>();
+        boolean modified = false;
+
+        try {
+            if (patron == Patron.ANGEL) {
+                modified = upgradeAllSupportedAttributes(copy, effStep, deltas);
+            } else {
+                DeltaAndFlag res = upgradeOneRandomSupportedAttribute(copy, rand, effStep);
+                modified = res.modified;
+                if (modified && res.delta != null) deltas.add(res.delta);
+            }
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] tryUpgradeWithPatron failed: {}", t.toString());
+        }
+
+        if (!modified) {
+            return new Result(copy, false, currentLevel);
+        }
+
+        // Enforce max level
+        int newLevel = Math.min(currentLevel + 1, UpgradeServerConfig.snapshot().maxLevel);
+
+        // Write audit entries for each touched attribute
+        try {
+            for (AttributeDelta d : deltas) {
+                writeAudit(copy, currentLevel, newLevel, d);
+            }
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] writeAudit (multi) failed: {}", t.toString());
+        }
+
+        // Name suffix
+        try {
+            applyColoredSuffix(copy, newLevel);
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] applyColoredSuffix failed: {}", t.toString());
+        }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("[UpgradeService] Patron={} level {}->{} step={} (base={}, mult={}) changed={} attrs",
+                    patron, currentLevel, newLevel, round3(effStep), round3(baseStep), round3(patronStepMultiplier(patron)), deltas.size());
+            for (AttributeDelta d : deltas) {
+                LOG.debug("  - {} {} old={} new={} Δ={} pct={} rule={}",
+                        d.attrKey, d.op, round3(d.oldValue), round3(d.newValue), round3(d.deltaValue), round3(d.appliedPercent), d.ruleId);
+            }
+        }
+
+        return new Result(copy, true, newLevel);
+    }
+
+    // -------------------- Reputation helpers --------------------
 
     /**
-     * Holder for a single attribute change performed during the upgrade.
+     * Applies reputation to a base failure probability.
+     * Normalize rep into [-1..+1], then apply linear scale (±50% at extremes if scale=1).
      */
+    public static double applyReputationToFailure(double baseFail, double rep, int repMin, int repMax, double repEffectScale, Patron patron) {
+        try {
+            if (repMax <= repMin) return clamp01(baseFail);
+            rep = Mth.clamp(rep, repMin, repMax);
+
+            double mid = 0.5 * (repMin + repMax);
+            double halfRange = 0.5 * (repMax - repMin);
+            if (halfRange <= 0.0) return clamp01(baseFail);
+
+            double norm = (rep - mid) / halfRange; // [-1..+1]
+            norm = Mth.clamp(norm, -1.0, 1.0);
+
+            double mult = 1.0 - (norm * 0.5 * Math.max(0.0, repEffectScale));
+
+            double eff = clamp01(baseFail * Math.max(0.0, mult));
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("[UpgradeService][Reputation] patron={} rep={} norm={} mult={} baseFail={} effFail={}",
+                        patron, round3(rep), round3(norm), round3(mult), round3(baseFail), round3(eff));
+            }
+            return eff;
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] applyReputationToFailure failed: {}", t.toString());
+            return clamp01(baseFail);
+        }
+    }
+
+    /** Patron-aware scalar for step magnitudes. */
+    public static double patronStepMultiplier(Patron patron) {
+        try {
+            Snapshot s = UpgradeServerConfig.snapshot();
+            return switch (patron) {
+                case ANGEL -> Math.max(0.0, s.angelAllMult);
+                case DEMON -> Math.max(0.0, s.demonRandomMult);
+            };
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] patronStepMultiplier failed: {}", t.toString());
+            return 1.0;
+        }
+    }
+
+    // -------------------- Core logic --------------------
+
+    /** Holder for a single attribute change performed during the upgrade. */
     private static final class AttributeDelta {
-        final String attrKey;              // e.g. "minecraft:generic.attack_damage" or best-effort
+        final String attrKey;              // e.g. "minecraft:generic.attack_damage"
         final String op;                   // AttributeModifier.Operation name
         final double oldValue;
         final double newValue;
@@ -172,24 +313,60 @@ public final class UpgradeService {
     }
 
     /**
-     * Upgrades ONE random supported attribute. Returns whether any change was made
-     * and the exact delta facts for audit/tooltip purposes.
+     * ANGEL path: upgrade ALL eligible entries. Returns true if at least one changed.
+     * Writes the new attribute component and fills 'deltas' with one delta per changed entry.
      */
-    private static DeltaAndFlag upgradeOneRandomSupportedAttribute(ItemStack stack, RandomSource rand) {
+    private static boolean upgradeAllSupportedAttributes(ItemStack stack, double step, List<AttributeDelta> deltasOut) {
+        if (stack == null || stack.isEmpty()) return false;
+
+        // Collect current + defaults
+        List<Entry> current = new ArrayList<>(stack.getAttributeModifiers().modifiers());
+        List<Entry> defaults = new ArrayList<>(stack.getItem().getDefaultAttributeModifiers(stack).modifiers());
+
+        // Rebuild, scaling every eligible entry; collect deltas
+        ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
+        boolean any = false;
+
+        for (Entry e : mergeListsUnique(current, defaults)) {
+            Holder<Attribute> a = e.attribute();
+            AttributeModifier m = e.modifier();
+
+            if (a == null || m == null || !SUPPORTED.contains(a)) {
+                builder.add(a, m, e.slot());
+                continue;
+            }
+
+            AttributeModifier scaled = scaleModifier(a, m, step);
+            if (scaled.amount() != m.amount()) {
+                any = true;
+                String key = tryAttributeKey(a);
+                double oldV = m.amount();
+                double newV = scaled.amount();
+                double pct = a.is(Attributes.ATTACK_SPEED) ? -step : step;
+
+                deltasOut.add(new AttributeDelta(
+                        key, m.operation().name(), oldV, newV, newV - oldV, pct, "percent_step:" + pct
+                ));
+            }
+            builder.add(a, scaled, e.slot());
+        }
+
+        if (!any) return false;
+        stack.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
+        return true;
+    }
+
+    /**
+     * DEMON path: upgrades ONE random supported attribute from eligible set.
+     * Step already includes the patron multiplier.
+     */
+    private static DeltaAndFlag upgradeOneRandomSupportedAttribute(ItemStack stack, RandomSource rand, double step) {
         if (stack == null || stack.isEmpty()) return new DeltaAndFlag(false, null);
-
-        int level = parseLevel(stack);
-
-        // We keep using your original step math for now (COMMON config), because
-        // preview and earlier logic depend on it. Server rules for which attribute
-        // to change will come later when we expand rule system; here we preserve behavior.
-        double step = Math.max(0.0, Config.TUNING.percentBonusForLevelUp(level));
 
         // Collect all supported modifier entries (current + defaults)
         List<Entry> current = new ArrayList<>(stack.getAttributeModifiers().modifiers());
         List<Entry> defaults = new ArrayList<>(stack.getItem().getDefaultAttributeModifiers(stack).modifiers());
 
-        // Decide which entries are eligible (by attribute id)
         List<Entry> eligible = new ArrayList<>();
         for (Entry e : mergeLists(current, defaults)) {
             if (e == null) continue;
@@ -201,7 +378,6 @@ public final class UpgradeService {
         }
         if (eligible.isEmpty()) return new DeltaAndFlag(false, null);
 
-        // RANDOM pick: choose one entry to modify
         Entry chosen = eligible.get(rand.nextInt(eligible.size()));
         Holder<Attribute> chosenAttr = chosen.attribute();
         AttributeModifier chosenMod = chosen.modifier();
@@ -209,14 +385,11 @@ public final class UpgradeService {
         double oldVal = chosenMod.amount();
         String opName = chosenMod.operation().name();
 
-        // Compute new value for the chosen entry
         AttributeModifier scaledChosen = scaleModifier(chosenAttr, chosenMod, step);
         double newVal = scaledChosen.amount();
 
-        // Best-effort applied percent (sign-aware):
         double appliedPercent = chosenAttr.is(Attributes.ATTACK_SPEED) ? -step : step;
 
-        // Rebuild all modifiers, replacing ONLY the chosen entry with the scaled version
         ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
         boolean modified = false;
 
@@ -240,16 +413,9 @@ public final class UpgradeService {
 
         stack.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
 
-        // Build delta facts for audit
         String attrKey = tryAttributeKey(chosenAttr);
         AttributeDelta delta = new AttributeDelta(
-                attrKey,
-                opName,
-                oldVal,
-                newVal,
-                newVal - oldVal,
-                appliedPercent,
-                "percent_step:" + appliedPercent
+                attrKey, opName, oldVal, newVal, newVal - oldVal, appliedPercent, "percent_step:" + appliedPercent
         );
         return new DeltaAndFlag(true, delta);
     }
@@ -413,13 +579,5 @@ public final class UpgradeService {
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }
 
-    // Optional: small debug pretty-printer
-    @SuppressWarnings("unused")
-    private static Component prettyAttrName(Holder<Attribute> a) {
-        try {
-            return Component.translatable(a.value().getDescriptionId()).withStyle(ChatFormatting.GRAY);
-        } catch (Throwable ignored) {
-            return Component.literal(String.valueOf(a)).withStyle(ChatFormatting.GRAY);
-        }
-    }
+    private static double round3(double d) { return Math.round(d * 1000.0) / 1000.0; }
 }

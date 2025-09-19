@@ -34,14 +34,17 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.client.AngelRenderer;
+import org.z2six.infiniteupgrades.client.render.AngelRenderer;
+import org.z2six.infiniteupgrades.client.render.DemonRenderer;
 import org.z2six.infiniteupgrades.client.screen.AngelScreen;
+import org.z2six.infiniteupgrades.client.screen.DemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 import org.z2six.infiniteupgrades.world.AngelEntity;
-import org.z2six.infiniteupgrades.world.SigilBlock;
+import org.z2six.infiniteupgrades.world.AngelSigil;
+import org.z2six.infiniteupgrades.world.DemonSigil;
 
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
@@ -70,10 +73,10 @@ public class Infiniteupgrades {
                             .displayItems((parameters, output) -> output.accept(EXAMPLE_ITEM.get()))
                             .build());
 
-    // Our Sigil
+    // --- Angel Sigil (existing)
     public static final DeferredBlock<Block> CELESTIAL_SIGIL = BLOCKS.register(
             "celestial_sigil",
-            () -> new SigilBlock(BlockBehaviour.Properties.of()
+            () -> new AngelSigil(BlockBehaviour.Properties.of()
                     .mapColor(MapColor.GOLD)
                     .noCollission()
                     .noOcclusion()
@@ -81,6 +84,18 @@ public class Infiniteupgrades {
 
     public static final DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
+
+    // --- Demon Sigil (new)
+    public static final DeferredBlock<Block> UNHOLY_SIGIL = BLOCKS.register(
+            "unholy_sigil",
+            () -> new DemonSigil(BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.COLOR_BLACK)
+                    .noCollission()
+                    .noOcclusion()
+                    .strength(0.1f)));
+
+    public static final DeferredItem<BlockItem> UNHOLY_SIGIL_ITEM =
+            ITEMS.registerSimpleBlockItem("unholy_sigil", UNHOLY_SIGIL);
 
     // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
@@ -117,6 +132,7 @@ public class Infiniteupgrades {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
                 event.accept(EXAMPLE_BLOCK_ITEM);
                 event.accept(CELESTIAL_SIGIL_ITEM);
+                event.accept(UNHOLY_SIGIL_ITEM); // NEW: add demon sigil to tab
                 LOGGER.debug("[Infiniteupgrades] Added items to BUILDING_BLOCKS tab");
             }
         } catch (Throwable t) {
@@ -126,6 +142,7 @@ public class Infiniteupgrades {
 
     private void registerEntityAttributes(final EntityAttributeCreationEvent evt) {
         evt.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
+        // Demon currently has no attribute builder (ambient MISC); nothing to add here.
     }
 
     @SubscribeEvent
@@ -149,6 +166,13 @@ public class Infiniteupgrades {
             } catch (Throwable t) {
                 LOGGER.error("[InfiniteUpgrades] Failed to register AngelScreen", t);
             }
+
+            try {
+                evt.register(ModMenus.DEMON_MENU.get(), DemonScreen::new);
+                LOGGER.debug("[InfiniteUpgrades] Registered DemonScreen");
+            } catch (Throwable t) {
+                LOGGER.error("[InfiniteUpgrades] Failed to register DemonScreen", t);
+            }
         }
 
         @SubscribeEvent
@@ -158,6 +182,13 @@ public class Infiniteupgrades {
                 LOGGER.debug("[InfiniteUpgrades] Registered AngelRenderer (GeckoLib)");
             } catch (Throwable t) {
                 LOGGER.error("[InfiniteUpgrades] Failed to register AngelRenderer", t);
+            }
+
+            try {
+                evt.registerEntityRenderer(ModEntityTypes.DEMON.get(), DemonRenderer::new);
+                LOGGER.debug("[InfiniteUpgrades] Registered DemonRenderer");
+            } catch (Throwable t) {
+                LOGGER.error("[InfiniteUpgrades] Failed to register DemonRenderer", t);
             }
         }
     }
