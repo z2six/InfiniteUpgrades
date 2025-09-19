@@ -34,12 +34,14 @@ import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.AngelRenderer;
+import org.z2six.infiniteupgrades.client.DemonRenderer;
 import org.z2six.infiniteupgrades.client.screen.AngelScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 import org.z2six.infiniteupgrades.world.AngelEntity;
+import org.z2six.infiniteupgrades.world.DemonEntity;
 import org.z2six.infiniteupgrades.world.SigilBlock;
 
 @Mod(Infiniteupgrades.MODID)
@@ -81,7 +83,7 @@ public class Infiniteupgrades {
     public static final DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
 
-    // NEW: Unholy Sigil (Step 1) — identical behavior for now; visuals/recipe differ
+    // Unholy Sigil
     public static final DeferredBlock<Block> UNHOLY_SIGIL = BLOCKS.register(
             "unholy_sigil",
             () -> new SigilBlock(BlockBehaviour.Properties.of()
@@ -128,7 +130,7 @@ public class Infiniteupgrades {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
                 event.accept(EXAMPLE_BLOCK_ITEM);
                 event.accept(CELESTIAL_SIGIL_ITEM);
-                event.accept(UNHOLY_SIGIL_ITEM); // NEW: show Unholy Sigil in the same tab
+                event.accept(UNHOLY_SIGIL_ITEM);
                 LOGGER.debug("[Infiniteupgrades] Added items to BUILDING_BLOCKS tab");
             }
         } catch (Throwable t) {
@@ -138,6 +140,7 @@ public class Infiniteupgrades {
 
     private void registerEntityAttributes(final EntityAttributeCreationEvent evt) {
         evt.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
+        evt.put(ModEntityTypes.DEMON.get(), DemonEntity.createAttributes().build()); // NEW
     }
 
     @SubscribeEvent
@@ -156,7 +159,7 @@ public class Infiniteupgrades {
         @SubscribeEvent
         public static void registerScreens(RegisterMenuScreensEvent evt) {
             try {
-                evt.register(ModMenus.ANGEL_MENU.get(), AngelScreen::new);
+                evt.register(ModMenus.ANGEL_MENU.get(), org.z2six.infiniteupgrades.client.screen.AngelScreen::new);
                 LOGGER.debug("[InfiniteUpgrades] Registered AngelScreen");
             } catch (Throwable t) {
                 LOGGER.error("[InfiniteUpgrades] Failed to register AngelScreen", t);
@@ -167,9 +170,10 @@ public class Infiniteupgrades {
         public static void registerRenderers(final EntityRenderersEvent.RegisterRenderers evt) {
             try {
                 evt.registerEntityRenderer(ModEntityTypes.ANGEL.get(), AngelRenderer::new);
-                LOGGER.debug("[InfiniteUpgrades] Registered AngelRenderer (GeckoLib)");
+                evt.registerEntityRenderer(ModEntityTypes.DEMON.get(), DemonRenderer::new); // NEW
+                LOGGER.debug("[InfiniteUpgrades] Registered AngelRenderer & DemonRenderer (GeckoLib)");
             } catch (Throwable t) {
-                LOGGER.error("[InfiniteUpgrades] Failed to register AngelRenderer", t);
+                LOGGER.error("[InfiniteUpgrades] Failed to register entity renderers", t);
             }
         }
     }

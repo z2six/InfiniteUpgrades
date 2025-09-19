@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/SigilBlock.java
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
@@ -19,6 +18,7 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.world.blockentity.SigilBlockEntity;
 
@@ -48,35 +48,53 @@ public final class SigilBlock extends Block implements EntityBlock {
         return new SigilBlockEntity(pos, state);
     }
 
-    // Spawn the angel when placed
+    // Spawn the correct ritual NPC when placed
     @Override
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, net.minecraft.world.entity.LivingEntity placer, ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (level.isClientSide) return;
         ServerLevel srv = (ServerLevel) level;
         try {
-            // Avoid duplicates: if an anchored angel exists here, skip
+            boolean isUnholy = state.getBlock() == Infiniteupgrades.UNHOLY_SIGIL.get();
             AABB box = AABB.unitCubeFromLowerCorner(pos.getCenter()).inflate(1.0);
-            List<AngelEntity> existing = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
-            if (!existing.isEmpty()) {
-                LOG.debug("[SigilBlock] Angel already exists at {}; skipping spawn", pos);
-                return;
-            }
 
-            AngelEntity angel = ModEntityTypes.ANGEL.get().create(srv);
-            if (angel == null) {
-                LOG.error("[SigilBlock] Failed to create AngelEntity at {}", pos);
-                return;
+            if (isUnholy) {
+                // Avoid duplicates: Demon anchored here already?
+                List<DemonEntity> existing = srv.getEntities(ModEntityTypes.DEMON.get(), box, e -> e.getAnchor().equals(pos));
+                if (!existing.isEmpty()) {
+                    LOG.debug("[SigilBlock] Demon already exists at {}; skipping spawn", pos);
+                    return;
+                }
+                DemonEntity demon = ModEntityTypes.DEMON.get().create(srv);
+                if (demon == null) {
+                    LOG.error("[SigilBlock] Failed to create DemonEntity at {}", pos);
+                    return;
+                }
+                demon.setAnchor(pos);
+                srv.addFreshEntityWithPassengers(demon);
+                LOG.info("[SigilBlock] Spawned DemonEntity id={} at {}", demon.getId(), pos);
+            } else {
+                // Celestial (Angel)
+                List<AngelEntity> existing = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
+                if (!existing.isEmpty()) {
+                    LOG.debug("[SigilBlock] Angel already exists at {}; skipping spawn", pos);
+                    return;
+                }
+                AngelEntity angel = ModEntityTypes.ANGEL.get().create(srv);
+                if (angel == null) {
+                    LOG.error("[SigilBlock] Failed to create AngelEntity at {}", pos);
+                    return;
+                }
+                angel.setAnchor(pos);
+                srv.addFreshEntityWithPassengers(angel);
+                LOG.info("[SigilBlock] Spawned AngelEntity id={} at {}", angel.getId(), pos);
             }
-            angel.setAnchor(pos);
-            srv.addFreshEntityWithPassengers(angel);
-            LOG.info("[SigilBlock] Spawned AngelEntity id={} at {}", angel.getId(), pos);
         } catch (Throwable t) {
             LOG.error("[SigilBlock] setPlacedBy spawn failed at {}: {}", pos, t.toString());
         }
     }
 
-    // Remove the angel and drop BE contents when the sigil is broken/replaced
+    // Remove anchored ritual NPC and drop BE contents when the sigil is broken/replaced
     @Override
     public void onRemove(BlockState oldState, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
         super.onRemove(oldState, level, pos, newState, isMoving);
@@ -91,11 +109,21 @@ public final class SigilBlock extends Block implements EntityBlock {
             }
 
             ServerLevel srv = (ServerLevel) level;
+            boolean wasUnholy = oldState.getBlock() == Infiniteupgrades.UNHOLY_SIGIL.get();
             AABB box = new AABB(pos).inflate(1.5);
-            List<AngelEntity> toRemove = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
-            for (AngelEntity e : toRemove) {
-                e.discard();
-                LOG.info("[SigilBlock] Removed AngelEntity id={} anchored at {}", e.getId(), pos);
+
+            if (wasUnholy) {
+                List<DemonEntity> toRemove = srv.getEntities(ModEntityTypes.DEMON.get(), box, e -> e.getAnchor().equals(pos));
+                for (DemonEntity e : toRemove) {
+                    e.discard();
+                    LOG.info("[SigilBlock] Removed DemonEntity id={} anchored at {}", e.getId(), pos);
+                }
+            } else {
+                List<AngelEntity> toRemove = srv.getEntities(ModEntityTypes.ANGEL.get(), box, e -> e.getAnchor().equals(pos));
+                for (AngelEntity e : toRemove) {
+                    e.discard();
+                    LOG.info("[SigilBlock] Removed AngelEntity id={} anchored at {}", e.getId(), pos);
+                }
             }
         } catch (Throwable t) {
             LOG.error("[SigilBlock] onRemove cleanup failed at {}: {}", pos, t.toString());

@@ -1,4 +1,3 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/registry/ModEntityTypes.java
 package org.z2six.infiniteupgrades.registry;
 
 import com.mojang.logging.LogUtils;
@@ -11,6 +10,7 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.world.AngelEntity;
+import org.z2six.infiniteupgrades.world.DemonEntity;
 
 public final class ModEntityTypes {
     // Debug logger
@@ -25,9 +25,21 @@ public final class ModEntityTypes {
                 LOG.debug("[ModEntityTypes] Building EntityType<AngelEntity>");
                 ResourceLocation id = ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "angel");
                 return EntityType.Builder.<AngelEntity>of(AngelEntity::new, MobCategory.MISC)
-                        .sized(0.6f, 3.6f) // ~zombie width, tall like your future angel (≈ 4 blocks visual, hitbox smaller)
+                        .sized(0.6f, 3.6f)
                         .clientTrackingRange(64)
-                        .updateInterval(Integer.MAX_VALUE) // it doesn't change; no frequent packets
+                        .updateInterval(Integer.MAX_VALUE)
+                        .build(id.toString());
+            });
+
+    // NEW: Demon entity type (same footprint/behavioral flags as Angel)
+    public static final DeferredHolder<EntityType<?>, EntityType<DemonEntity>> DEMON =
+            ENTITY_TYPES.register("demon", () -> {
+                LOG.debug("[ModEntityTypes] Building EntityType<DemonEntity>");
+                ResourceLocation id = ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "demon");
+                return EntityType.Builder.<DemonEntity>of(DemonEntity::new, MobCategory.MISC)
+                        .sized(0.6f, 3.6f)
+                        .clientTrackingRange(64)
+                        .updateInterval(Integer.MAX_VALUE)
                         .build(id.toString());
             });
 
