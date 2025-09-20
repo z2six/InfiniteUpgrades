@@ -16,6 +16,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.world.menu.AngelMenu;
+import org.z2six.infiniteupgrades.logic.RitualType;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -39,8 +40,10 @@ import java.util.regex.Pattern;
 public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     private static final Logger LOG = LogUtils.getLogger();
 
-    private static final ResourceLocation BG =
+    private static final ResourceLocation BG_ANGEL =
             ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/angel_menu.png");
+    private static final ResourceLocation BG_DEMON =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/demon_menu.png");
 
     // Actual GUI portion size (top-left of 512x512)
     private static final int IMAGE_W = 274;
@@ -153,12 +156,8 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
 
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
-        // Only blit the top-left 274x166 of the 512x512 texture
-        gg.blit(BG, leftPos, topPos,
-                0, 0,
-                imageWidth, imageHeight,
-                512, 512);
-        // (No progress bar)
+        ResourceLocation bg = (this.menu.ritual() == RitualType.DEMON) ? BG_DEMON : BG_ANGEL;
+        gg.blit(bg, leftPos, topPos, 0, 0, imageWidth, imageHeight, 512, 512);
     }
 
     @Override

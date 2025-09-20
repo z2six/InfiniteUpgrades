@@ -14,45 +14,35 @@ import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
-import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Config;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig.ChanceModelType;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig.Snapshot;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Server-authoritative upgrade engine used by the menu.
  *
- * Now enhanced to:
- *  - Support ritual-specific behavior (Angel=ALL, Demon=ONE).
- *  - Apply ritual step multipliers from SERVER config.
- *  - Persist full audit per upgraded attribute.
- *  - Keep legacy preview math intact (preview still uses COMMON Config.TUNING).
+ * Dynamic rules:
+ *  - Rules come from UpgradeServerConfig.snapshot().attributes (defaults + attributesDynamic.rules).
+ *  - Angel ritual: apply ALL matching rules to attributes present on the item.
+ *  - Demon ritual: choose ONE matching rule weighted by 'weight' and apply it.
+ *
+ * Chance remains in this service; reputation bonus is handled by the menu when clicking.
  */
 public final class UpgradeService {
     private static final Logger LOG = LogUtils.getLogger();
 
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
-
-    private static final Set<Holder<Attribute>> SUPPORTED = Set.of(
-            Attributes.ATTACK_DAMAGE,
-            Attributes.ATTACK_SPEED,
-            Attributes.ARMOR,
-            Attributes.ARMOR_TOUGHNESS,
-            Attributes.KNOCKBACK_RESISTANCE
-    );
 
     private UpgradeService() {}
 
@@ -74,6 +64,7 @@ public final class UpgradeService {
             }
         } catch (Throwable t) {
             LOG.error("[UpgradeService] getSuccessChance failed: {}", t.toString());
+            // Defensive fallback to previous COMMON tuning if server config borked
             try {
                 return Config.TUNING.chanceForNextLevel(currentLevel);
             } catch (Throwable ignore) {
@@ -91,42 +82,80 @@ public final class UpgradeService {
 
         ItemStack copy = original.copy();
         int currentLevel = parseLevel(copy);
-
-        // Ritual step multiplier from SERVER config
         Snapshot snap = UpgradeServerConfig.snapshot();
-        double baseStep = Math.max(0.0, Config.TUNING.percentBonusForLevelUp(currentLevel));
-        double mult = ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult;
-        double step = baseStep * Math.max(0.0, mult);
 
-        boolean ok;
-        List<AttributeDelta> deltas;
+        // Collect enabled rules into a map for quick lookup
+        Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> ruleById = new LinkedHashMap<>();
+        for (var r : snap.attributes) {
+            if (r.enabled) ruleById.put(r.id, r);
+        }
+        if (ruleById.isEmpty()) return new Result(copy, false, currentLevel);
 
-        try {
-            if (ritual == RitualType.ANGEL) {
-                var res = upgradeAllSupportedAttributes(copy, step);
-                ok = res.modified;
-                deltas = res.deltas;
-            } else {
-                var res = upgradeOneRandomSupportedAttribute(copy, rand, step);
-                ok = res.modified;
-                deltas = ok ? List.of(res.delta) : List.of();
+        // Merge current+default entries once
+        List<Entry> current = new ArrayList<>(safeModifiers(copy).modifiers());
+        List<Entry> defaults = new ArrayList<>(copy.getItem().getDefaultAttributeModifiers(copy).modifiers());
+        List<Entry> working = mergeListsUnique(current, defaults);
+        if (working.isEmpty()) return new Result(copy, false, currentLevel);
+
+        // Identify which attribute ids are present AND have rules
+        List<ResourceLocation> presentIds = new ArrayList<>();
+        for (Entry e : working) {
+            ResourceLocation id = idOf(e.attribute());
+            if (id != null && ruleById.containsKey(id) && !presentIds.contains(id)) {
+                presentIds.add(id);
             }
-        } catch (Throwable t) {
-            LOG.error("[UpgradeService] tryUpgradeWithRitual failed: {}", t.toString());
-            ok = false;
-            deltas = List.of();
+        }
+        if (presentIds.isEmpty()) return new Result(copy, false, currentLevel);
+
+        double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
+
+        List<AttributeDelta> allDeltas = new ArrayList<>();
+        boolean changed = false;
+
+        if (ritual == RitualType.ANGEL) {
+            // Apply ALL rules sequentially, carrying the result forward
+            for (ResourceLocation id : presentIds) {
+                RuleResult rr = applyRule(working, id, ruleById.get(id), currentLevel, ritualMult);
+                working = rr.updated;
+                if (!rr.deltas.isEmpty()) {
+                    allDeltas.addAll(rr.deltas);
+                    changed = true;
+                }
+            }
+        } else {
+            // DEMON: choose ONE present id weighted by rule.weight
+            int totalW = 0;
+            for (ResourceLocation id : presentIds) totalW += Math.max(0, ruleById.get(id).weight);
+            if (totalW <= 0) totalW = presentIds.size();
+
+            int r = rand.nextInt(totalW);
+            ResourceLocation chosen = presentIds.get(0);
+            int acc = 0;
+            for (ResourceLocation id : presentIds) {
+                acc += Math.max(0, ruleById.get(id).weight);
+                if (r < acc) { chosen = id; break; }
+            }
+
+            RuleResult rr = applyRule(working, chosen, ruleById.get(chosen), currentLevel, ritualMult);
+            working = rr.updated;
+            if (!rr.deltas.isEmpty()) {
+                allDeltas.addAll(rr.deltas);
+                changed = true;
+            }
         }
 
-        if (!ok) {
-            return new Result(copy, false, currentLevel);
-        }
+        if (!changed) return new Result(copy, false, currentLevel);
 
+        // Commit modifiers
+        copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(working));
+
+        // Bump level & persist audit
         int newLevel = Math.min(currentLevel + 1, snap.maxLevel);
 
         try {
-            writeAudit(copy, currentLevel, newLevel, deltas);
+            writeAudit(copy, currentLevel, newLevel, allDeltas);
         } catch (Throwable t) {
-            LOG.error("[UpgradeService] writeAudit (multi) failed: {}", t.toString());
+            LOG.error("[UpgradeService] writeAudit failed: {}", t.toString());
         }
 
         try {
@@ -138,16 +167,16 @@ public final class UpgradeService {
         return new Result(copy, true, newLevel);
     }
 
-    /** Legacy single-attr upgrader kept for API compatibility (used nowhere now). */
+    /** Legacy single-attr upgrader kept for API compatibility (menu uses tryUpgradeWithRitual). */
     public static Result tryUpgrade(ItemStack original, RandomSource rand) {
         return tryUpgradeWithRitual(original, rand, RitualType.DEMON);
     }
 
     public static record Result(ItemStack upgraded, boolean success, int newLevel) {}
 
-    // -------------------- Core logic --------------------
+    // -------------------- Rule application --------------------
 
-    private static final class AttributeDelta {
+    private static class AttributeDelta {
         final String attrKey;
         final String op;
         final double oldValue;
@@ -161,139 +190,99 @@ public final class UpgradeService {
         }
     }
 
-    private static final class OneDelta {
-        final boolean modified;
-        final AttributeDelta delta;
-        OneDelta(boolean m, AttributeDelta d) { this.modified = m; this.delta = d; }
-    }
-
-    private static final class ManyDeltas {
-        final boolean modified;
+    private static class RuleResult {
+        final List<Entry> updated;
         final List<AttributeDelta> deltas;
-        ManyDeltas(boolean m, List<AttributeDelta> dl) { this.modified = m; this.deltas = dl; }
+        RuleResult(List<Entry> updated, List<AttributeDelta> deltas) {
+            this.updated = updated;
+            this.deltas = deltas;
+        }
     }
 
-    private static OneDelta upgradeOneRandomSupportedAttribute(ItemStack stack, RandomSource rand, double step) {
-        if (stack == null || stack.isEmpty()) return new OneDelta(false, null);
-
-        // Collect
-        List<Entry> current = new ArrayList<>(stack.getAttributeModifiers().modifiers());
-        List<Entry> defaults = new ArrayList<>(stack.getItem().getDefaultAttributeModifiers(stack).modifiers());
-
-        List<Entry> eligible = new ArrayList<>();
-        for (Entry e : mergeLists(current, defaults)) {
-            if (e == null) continue;
-            Holder<Attribute> a = e.attribute();
-            AttributeModifier m = e.modifier();
-            if (a == null || m == null) continue;
-            if (!SUPPORTED.contains(a)) continue;
-            eligible.add(e);
+    private static RuleResult applyRule(List<Entry> working,
+                                        ResourceLocation targetId,
+                                        UpgradeServerConfig.AttributeRuleConfig rule,
+                                        int currentLevel,
+                                        double ritualMult) {
+        if (working == null || working.isEmpty() || rule == null) {
+            return new RuleResult(working, List.of());
         }
-        if (eligible.isEmpty()) return new OneDelta(false, null);
 
-        Entry chosen = eligible.get(rand.nextInt(eligible.size()));
-        Holder<Attribute> chosenAttr = chosen.attribute();
-        AttributeModifier chosenMod = chosen.modifier();
+        // Resolve step for this level (overrides win)
+        double base = rule.perLevelOverrides.getOrDefault(currentLevel, rule.defaultStep);
+        double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-        double oldVal = chosenMod.amount();
-        String opName = chosenMod.operation().name();
+        // Count how many entries match this attribute id
+        int targets = 0;
+        for (Entry e : working) {
+            ResourceLocation id = idOf(e.attribute());
+            if (id != null && id.equals(targetId)) targets++;
+        }
+        if (targets == 0 || step <= 0.0) {
+            return new RuleResult(working, List.of());
+        }
 
-        AttributeModifier scaledChosen = scaleModifier(chosenAttr, chosenMod, step);
-        double newVal = scaledChosen.amount();
+        double perEntryAdd = 0.0;
+        if (rule.stepType == UpgradeServerConfig.StepType.ADDITIVE) {
+            double signed = (rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step;
+            perEntryAdd = signed / (double)targets;
+        }
 
-        double appliedPercent = chosenAttr.is(Attributes.ATTACK_SPEED) ? -step : step;
+        ItemAttributeModifiers.Builder b = ItemAttributeModifiers.builder();
+        List<AttributeDelta> deltas = new ArrayList<>();
 
-        ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
-        boolean modified = false;
-
-        for (Entry e : mergeListsUnique(current, defaults)) {
+        for (Entry e : working) {
             Holder<Attribute> a = e.attribute();
             AttributeModifier m = e.modifier();
             if (a == null || m == null) {
-                builder.add(a, m, e.slot());
-                continue;
-            }
-            if (!modified && sameEntry(e, chosen)) {
-                builder.add(a, scaledChosen, e.slot());
-                modified = true;
-            } else {
-                builder.add(a, m, e.slot());
-            }
-        }
-
-        if (!modified) return new OneDelta(false, null);
-
-        stack.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
-
-        String attrKey = tryAttributeKey(chosenAttr);
-        AttributeDelta delta = new AttributeDelta(
-                attrKey, opName, oldVal, newVal, newVal - oldVal, appliedPercent, "percent_step:" + appliedPercent
-        );
-        return new OneDelta(true, delta);
-    }
-
-    private static ManyDeltas upgradeAllSupportedAttributes(ItemStack stack, double step) {
-        if (stack == null || stack.isEmpty()) return new ManyDeltas(false, List.of());
-
-        List<Entry> current = new ArrayList<>(stack.getAttributeModifiers().modifiers());
-        List<Entry> defaults = new ArrayList<>(stack.getItem().getDefaultAttributeModifiers(stack).modifiers());
-
-        List<Entry> merged = mergeListsUnique(current, defaults);
-        if (merged.isEmpty()) return new ManyDeltas(false, List.of());
-
-        ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
-        List<AttributeDelta> results = new ArrayList<>();
-        boolean changed = false;
-
-        for (Entry e : merged) {
-            Holder<Attribute> a = e.attribute();
-            AttributeModifier m = e.modifier();
-            if (a == null || m == null) {
-                builder.add(a, m, e.slot());
-                continue;
-            }
-            if (!SUPPORTED.contains(a)) {
-                builder.add(a, m, e.slot());
+                b.add(a, m, e.slot());
                 continue;
             }
 
+            ResourceLocation id = idOf(a);
+            if (id == null || !id.equals(targetId)) {
+                b.add(a, m, e.slot());
+                continue;
+            }
+
+            // Apply the step
             double oldVal = m.amount();
-            AttributeModifier scaled = scaleModifier(a, m, step);
-            double newVal = scaled.amount();
+            double newVal;
 
-            double appliedPercent = a.is(Attributes.ATTACK_SPEED) ? -step : step;
+            if (rule.stepType == UpgradeServerConfig.StepType.PERCENT) {
+                double factor = (rule.direction == UpgradeServerConfig.Direction.INCREASE)
+                        ? (1.0 + step) : (1.0 - step);
 
-            builder.add(a, scaled, e.slot());
-            changed = true;
+                if (rule.applyToMagnitude) {
+                    double sign = Math.signum(oldVal == 0.0 ? 1.0 : oldVal);
+                    newVal = sign * (Math.abs(oldVal) * factor);
+                } else {
+                    newVal = oldVal * factor;
+                }
+            } else {
+                // ADDITIVE
+                newVal = oldVal + perEntryAdd;
+            }
 
-            String attrKey = tryAttributeKey(a);
-            results.add(new AttributeDelta(
-                    attrKey, m.operation().name(), oldVal, newVal, newVal - oldVal, appliedPercent, "percent_step:" + appliedPercent
+            // caps & rounding
+            newVal = Mth.clamp(newVal, rule.capMin, rule.capMax);
+            newVal = roundTo(newVal, rule.rounding);
+
+            AttributeModifier nm = new AttributeModifier(m.id(), newVal, m.operation());
+            b.add(a, nm, e.slot());
+
+            double appliedPercent = (rule.stepType == UpgradeServerConfig.StepType.PERCENT)
+                    ? ((rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step)
+                    : 0.0;
+
+            deltas.add(new AttributeDelta(
+                    id.toString(), m.operation().name(), oldVal, newVal, newVal - oldVal, appliedPercent,
+                    (rule.stepType == UpgradeServerConfig.StepType.PERCENT ? "pct_step" : "add_step")
             ));
         }
 
-        if (!changed) return new ManyDeltas(false, List.of());
-
-        stack.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
-        return new ManyDeltas(true, results);
-    }
-
-    /** scale by +(step) normally, but attack speed uses (1 - step) */
-    private static AttributeModifier scaleModifier(Holder<Attribute> attr, AttributeModifier mod, double step) {
-        double amount = mod.amount();
-        double scaled;
-
-        if (attr.is(Attributes.ATTACK_SPEED)) {
-            scaled = amount * (1.0 - step);
-            if (mod.operation() != AttributeModifier.Operation.ADD_VALUE) {
-                double min = 0.05;
-                scaled = Math.max(min, scaled);
-            }
-        } else {
-            scaled = amount * (1.0 + step);
-        }
-
-        return new AttributeModifier(mod.id(), scaled, mod.operation());
+        List<Entry> updated = b.build().modifiers();
+        return new RuleResult(updated, deltas);
     }
 
     // -------------------- Audit + Name helpers --------------------
@@ -308,7 +297,6 @@ public final class UpgradeService {
             root.putInt("level", levelAfter);
 
             CompoundTag totals = root.getCompound("totals");
-
             ListTag hist = root.getList("history", Tag.TAG_COMPOUND);
 
             for (AttributeDelta d : deltas) {
@@ -365,18 +353,25 @@ public final class UpgradeService {
         stack.set(DataComponents.CUSTOM_NAME, pretty);
     }
 
-    private static String tryAttributeKey(Holder<Attribute> holder) {
-        try {
-            return holder.unwrapKey().map(k -> k.location().toString()).orElseGet(() -> {
-                Attribute a = holder.value();
-                return a.getDescriptionId();
-            });
-        } catch (Throwable t) {
-            return String.valueOf(holder);
-        }
+    // -------------------- Small helpers --------------------
+
+    private static ItemAttributeModifiers safeModifiers(ItemStack s) {
+        try { return s.getAttributeModifiers(); }
+        catch (Throwable t) { return ItemAttributeModifiers.EMPTY; }
     }
 
-    // -------------------- Small helpers --------------------
+    private static @Nullable ResourceLocation idOf(Holder<Attribute> holder) {
+        try { return holder != null ? holder.unwrapKey().map(k -> k.location()).orElse(null) : null; }
+        catch (Throwable t) { return null; }
+    }
+
+    private static ItemAttributeModifiers fromEntries(List<Entry> entries) {
+        ItemAttributeModifiers.Builder b = ItemAttributeModifiers.builder();
+        for (Entry e : entries) {
+            b.add(e.attribute(), e.modifier(), e.slot());
+        }
+        return b.build();
+    }
 
     private static int parseLevel(ItemStack stack) {
         try {
@@ -396,6 +391,18 @@ public final class UpgradeService {
         return s;
     }
 
+    private static List<Entry> mergeListsUnique(List<Entry> current, List<Entry> defaults) {
+        List<Entry> out = new ArrayList<>(current);
+        for (Entry e : defaults) {
+            boolean dup = false;
+            for (Entry c : current) {
+                if (sameEntry(e, c)) { dup = true; break; }
+            }
+            if (!dup) out.add(e);
+        }
+        return out;
+    }
+
     private static boolean sameEntry(Entry a, Entry b) {
         if (a == b) return true;
         if (a == null || b == null) return false;
@@ -408,23 +415,9 @@ public final class UpgradeService {
                 && a.slot() == b.slot();
     }
 
-    private static List<Entry> mergeLists(List<Entry> a, List<Entry> b) {
-        List<Entry> out = new ArrayList<>(a.size() + b.size());
-        out.addAll(a);
-        out.addAll(b);
-        return out;
-    }
-
-    private static List<Entry> mergeListsUnique(List<Entry> current, List<Entry> defaults) {
-        List<Entry> out = new ArrayList<>(current);
-        for (Entry e : defaults) {
-            boolean dup = false;
-            for (Entry c : current) {
-                if (sameEntry(e, c)) { dup = true; break; }
-            }
-            if (!dup) out.add(e);
-        }
-        return out;
+    private static double roundTo(double v, double quantum) {
+        if (quantum <= 0.0) return v;
+        return Math.rint(v / quantum) * quantum;
     }
 
     private static double clamp01(double v) { return Math.max(0.0, Math.min(1.0, v)); }

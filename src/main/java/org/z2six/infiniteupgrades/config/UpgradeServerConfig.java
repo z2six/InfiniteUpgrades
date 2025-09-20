@@ -30,9 +30,10 @@ import java.util.*;
  *     deltaOnSuccess: double (e.g. 0.1)
  *     deltaOnFail: double (e.g. 0.0)
  *     crossCoupling: double (1.0 => opposite side gets -delta*1.0)
- *     bonusPerPoint: double (e.g. 0.001 => +0.1% per point)
- *     bonusClamp: double (e.g. 0.20 => max +20% bonus)
- * - attributes: see AttributeSection
+ *     bonusPerPoint: double (e.g., 0.001 => +0.1% per point)
+ *     bonusClamp: double (e.g., 0.20 => max +20%)
+ * - attributes (defaults): see AttributeSection below
+ * - attributesDynamic.rules (NEW): user-specified rules for ANY attribute id, format documented in comments
  */
 public final class UpgradeServerConfig {
     private static final Logger LOG = LogUtils.getLogger();
@@ -59,7 +60,7 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue CHANCE_EXP_BASE;    // for EXP
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CHANCE_OVERRIDES;
 
-    // rituals (per-ritual tuning multipliers)
+    // rituals
     public static final ModConfigSpec.DoubleValue RITUAL_ANGEL_STEP_MULT;
     public static final ModConfigSpec.DoubleValue RITUAL_DEMON_STEP_MULT;
 
@@ -71,7 +72,7 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue REP_BONUS_PER_POINT;
     public static final ModConfigSpec.DoubleValue REP_BONUS_CLAMP;
 
-    // attributes.<namespace>.<path> blocks (your defaults)
+    // defaults (vanilla) attribute sections
     public static final AttributeSection ATTACK_DAMAGE =
             new AttributeSection(B, "minecraft", "generic", "attack_damage",
                     true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -101,6 +102,9 @@ public final class UpgradeServerConfig {
                     true, 4, Direction.INCREASE, StepType.PERCENT, 0.10,
                     List.of(), 0.0, 1.0,
                     false, 0.0);
+
+    // user-defined dynamic attribute rules
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> CUSTOM_ATTR_RULES;
 
     public static final ModConfigSpec SPEC;
 
@@ -132,9 +136,9 @@ public final class UpgradeServerConfig {
         B.pop();
 
         B.push("rituals");
-        RITUAL_ANGEL_STEP_MULT = B.comment("Multiplier for Angel step size (applied to per-level percent step).")
+        RITUAL_ANGEL_STEP_MULT = B.comment("Multiplier for Angel step size (applied to per-level rule step).")
                 .defineInRange("angelStepMultiplier", 1.0, 0.0, 100.0);
-        RITUAL_DEMON_STEP_MULT = B.comment("Multiplier for Demon step size (applied to per-level percent step).")
+        RITUAL_DEMON_STEP_MULT = B.comment("Multiplier for Demon step size (applied to per-level rule step).")
                 .defineInRange("demonStepMultiplier", 1.5, 0.0, 100.0);
         B.pop();
 
@@ -151,6 +155,20 @@ public final class UpgradeServerConfig {
                 .defineInRange("bonusPerPoint", 0.001, -1.0, 1.0);
         REP_BONUS_CLAMP = B.comment("Clamp on absolute bonus from reputation (e.g., 0.20 = ±20%).")
                 .defineInRange("bonusClamp", 0.20, 0.0, 1.0);
+        B.pop();
+
+        // ---- Dynamic rules input ----
+        B.push("attributesDynamic");
+        CUSTOM_ATTR_RULES = B.comment(
+                "Add custom attribute rules (ANY attribute id) – one rule per line.",
+                "Format (semicolon-separated; first token can be the id unless you use id=...):",
+                "  minecraft:generic.max_health; enabled=true; weight=8; direction=INCREASE; stepType=ADDITIVE; defaultStep=1.0; capMin=0; capMax=2048; applyToMagnitude=false; rounding=0.0; overrides=5:2.0,10:5.0",
+                "Tokens (all optional except id): enabled, weight, direction, stepType, defaultStep, overrides, capMin, capMax, applyToMagnitude, rounding",
+                "Examples:",
+                "  minecraft:generic.max_health; stepType=ADDITIVE; defaultStep=2.0; weight=6; capMin=0; capMax=2048",
+                "  coolmod:magic_damage; stepType=PERCENT; direction=INCREASE; defaultStep=0.03; weight=12; rounding=0.01",
+                "  minecraft:generic.attack_speed; stepType=PERCENT; direction=DECREASE; defaultStep=0.05; applyToMagnitude=true"
+        ).defineListAllowEmpty("rules", List.of(), o -> o instanceof String);
         B.pop();
 
         SPEC = B.build();
@@ -178,7 +196,7 @@ public final class UpgradeServerConfig {
         public final double repBonusPerPoint;
         public final double repBonusClamp;
 
-        public final List<AttributeRuleConfig> attributes;
+        public final List<AttributeRuleConfig> attributes; // defaults + dynamic
 
         private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
                          double start, double dec, double expBase,
@@ -268,6 +286,9 @@ public final class UpgradeServerConfig {
             attrs.add(ARMOR_TOUGHNESS.toRuleConfig());
             attrs.add(KNOCKBACK_RESISTANCE.toRuleConfig());
 
+            // Append dynamic rules
+            attrs.addAll(parseCustomRules(CUSTOM_ATTR_RULES.get()));
+
             return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
                     angelMult, demonMult,
                     repMax, repSucc, repFail, repCross, repBonusPerPoint, repBonusClamp,
@@ -291,6 +312,83 @@ public final class UpgradeServerConfig {
                     )
             );
         }
+    }
+
+    private static Map<Integer, Double> parseOverridesKV(String s) {
+        Map<Integer, Double> out = new LinkedHashMap<>();
+        if (s == null || s.isBlank()) return out;
+        String[] pairs = s.split(",");
+        for (String p : pairs) {
+            int idx = p.indexOf(':');
+            if (idx <= 0 || idx >= p.length() - 1) continue;
+            try {
+                int lvl = Integer.parseInt(p.substring(0, idx).trim());
+                double val = Double.parseDouble(p.substring(idx + 1).trim());
+                out.put(lvl, val);
+            } catch (NumberFormatException ignored) {}
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static List<AttributeRuleConfig> parseCustomRules(@Nullable List<? extends String> lines) {
+        if (lines == null || lines.isEmpty()) return List.of();
+        List<AttributeRuleConfig> out = new ArrayList<>();
+        for (Object o : lines) {
+            if (!(o instanceof String raw)) continue;
+            String line = raw.trim();
+            if (line.isEmpty()) continue;
+
+            boolean enabled = true;
+            int weight = 1;
+            Direction direction = Direction.INCREASE;
+            StepType stepType = StepType.PERCENT;
+            double defaultStep = 0.05;
+            Map<Integer, Double> perLevelOverrides = Map.of();
+            double capMin = Double.NEGATIVE_INFINITY;
+            double capMax = Double.POSITIVE_INFINITY;
+            boolean applyToMagnitude = false;
+            double rounding = 0.0;
+
+            String idStr = null;
+
+            for (String tok : line.split(";")) {
+                String t = tok.trim();
+                if (t.isEmpty()) continue;
+
+                // Non key=value token can serve as the id (first).
+                if (!t.contains("=") && idStr == null) {
+                    idStr = t;
+                    continue;
+                }
+
+                int eq = t.indexOf('=');
+                if (eq <= 0 || eq >= t.length() - 1) continue;
+                String k = t.substring(0, eq).trim().toLowerCase(Locale.ROOT);
+                String v = t.substring(eq + 1).trim();
+
+                switch (k) {
+                    case "id" -> idStr = v;
+                    case "enabled" -> enabled = Boolean.parseBoolean(v);
+                    case "weight" -> { try { weight = Math.max(0, Integer.parseInt(v)); } catch (NumberFormatException ignored) {} }
+                    case "direction" -> { try { direction = Direction.valueOf(v.toUpperCase(Locale.ROOT)); } catch (IllegalArgumentException ignored) {} }
+                    case "steptype" -> { try { stepType = StepType.valueOf(v.toUpperCase(Locale.ROOT)); } catch (IllegalArgumentException ignored) {} }
+                    case "defaultstep" -> { try { defaultStep = Double.parseDouble(v); } catch (NumberFormatException ignored) {} }
+                    case "overrides" -> perLevelOverrides = parseOverridesKV(v);
+                    case "capmin" -> { try { capMin = Double.parseDouble(v); } catch (NumberFormatException ignored) {} }
+                    case "capmax" -> { try { capMax = Double.parseDouble(v); } catch (NumberFormatException ignored) {} }
+                    case "applytomagnitude" -> applyToMagnitude = Boolean.parseBoolean(v);
+                    case "rounding" -> { try { rounding = Math.max(0.0, Double.parseDouble(v)); } catch (NumberFormatException ignored) {} }
+                }
+            }
+
+            if (idStr == null || idStr.isEmpty()) continue;
+            try {
+                ResourceLocation id = ResourceLocation.parse(idStr);
+                out.add(new AttributeRuleConfig(id, enabled, weight, direction, stepType, defaultStep,
+                        perLevelOverrides, capMin, capMax, applyToMagnitude, rounding));
+            } catch (Throwable ignored) {}
+        }
+        return List.copyOf(out);
     }
 
     private static Map<Integer, Double> parseLevelDoubleMap(@Nullable List<? extends String> lines, String label) {
