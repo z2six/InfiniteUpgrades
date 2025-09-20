@@ -16,15 +16,22 @@ import java.util.*;
  * Structure:
  * - general:
  *     maxLevel: int
- *     upgradeMode: "RANDOM" | "ALL"
- *     nameColorRules: list of ranges mapping to colors, e.g.
- *         ["1-4=blue","5-9=light_purple","10+=gold"]
+ *     upgradeMode: "RANDOM" | "ALL"         (legacy/global; ritual-specific logic overrides this)
+ *     nameColorRules: [...]
  * - chance:
  *     model: "FLAT_DECREMENT" | "EXPONENTIAL"
- *     startChance: double (0..1)
- *     decrementPerLevel: double (0..1)   [for FLAT]
- *     exponentialBase: double (0..1)     [for EXPONENTIAL, e.g. 0.95]
- *     overrides: list of "level=chance"  (applies at current level L for L->L+1)
+ *     startChance, decrementPerLevel, exponentialBase
+ *     overrides: "level=chance"
+ * - rituals:
+ *     angelStepMultiplier: double (e.g. 1.0)
+ *     demonStepMultiplier: double (e.g. 1.5)
+ * - reputation:
+ *     max: int (absolute cap, symmetric)
+ *     deltaOnSuccess: double (e.g. 0.1)
+ *     deltaOnFail: double (e.g. 0.0)
+ *     crossCoupling: double (1.0 => opposite side gets -delta*1.0)
+ *     bonusPerPoint: double (e.g. 0.001 => +0.1% per point)
+ *     bonusClamp: double (e.g. 0.20 => max +20% bonus)
  * - attributes: see AttributeSection
  */
 public final class UpgradeServerConfig {
@@ -52,7 +59,19 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue CHANCE_EXP_BASE;    // for EXP
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CHANCE_OVERRIDES;
 
-    // attributes.<namespace>.<path> blocks (our 5 defaults)
+    // rituals (per-ritual tuning multipliers)
+    public static final ModConfigSpec.DoubleValue RITUAL_ANGEL_STEP_MULT;
+    public static final ModConfigSpec.DoubleValue RITUAL_DEMON_STEP_MULT;
+
+    // reputation
+    public static final ModConfigSpec.IntValue REP_MAX;
+    public static final ModConfigSpec.DoubleValue REP_DELTA_SUCCESS;
+    public static final ModConfigSpec.DoubleValue REP_DELTA_FAIL;
+    public static final ModConfigSpec.DoubleValue REP_CROSS_COUPLING;
+    public static final ModConfigSpec.DoubleValue REP_BONUS_PER_POINT;
+    public static final ModConfigSpec.DoubleValue REP_BONUS_CLAMP;
+
+    // attributes.<namespace>.<path> blocks (your defaults)
     public static final AttributeSection ATTACK_DAMAGE =
             new AttributeSection(B, "minecraft", "generic", "attack_damage",
                     true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -89,7 +108,7 @@ public final class UpgradeServerConfig {
         B.push("general");
         GENERAL_MAX_LEVEL = B.comment("Maximum enhancement level.")
                 .defineInRange("maxLevel", 20, 0, 1000);
-        GENERAL_MODE = B.comment("Upgrade mode: RANDOM (pick one attribute) or ALL (apply all).")
+        GENERAL_MODE = B.comment("Upgrade mode: RANDOM (pick one attribute) or ALL (apply all). (Legacy/global; ritual-specific logic overrides this)")
                 .defineEnum("upgradeMode", UpgradeMode.RANDOM);
 
         NAME_COLOR_RULES = B.comment("Name color tiers by level. Formats: 'A-B=color', 'A+=color', or 'N=color'.",
@@ -112,6 +131,28 @@ public final class UpgradeServerConfig {
                 .defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
         B.pop();
 
+        B.push("rituals");
+        RITUAL_ANGEL_STEP_MULT = B.comment("Multiplier for Angel step size (applied to per-level percent step).")
+                .defineInRange("angelStepMultiplier", 1.0, 0.0, 100.0);
+        RITUAL_DEMON_STEP_MULT = B.comment("Multiplier for Demon step size (applied to per-level percent step).")
+                .defineInRange("demonStepMultiplier", 1.5, 0.0, 100.0);
+        B.pop();
+
+        B.push("reputation");
+        REP_MAX = B.comment("Absolute max magnitude of reputation for either side (symmetric).")
+                .defineInRange("max", 100, 1, 100000);
+        REP_DELTA_SUCCESS = B.comment("Reputation delta applied to the chosen side on SUCCESS.")
+                .defineInRange("deltaOnSuccess", 0.1, -1000.0, 1000.0);
+        REP_DELTA_FAIL = B.comment("Reputation delta applied to the chosen side on FAIL.")
+                .defineInRange("deltaOnFail", 0.0, -1000.0, 1000.0);
+        REP_CROSS_COUPLING = B.comment("Opposite side receives -delta*crossCoupling.")
+                .defineInRange("crossCoupling", 1.0, 0.0, 1000.0);
+        REP_BONUS_PER_POINT = B.comment("Bonus success chance per reputation point (e.g., 0.001 = +0.1% per point).")
+                .defineInRange("bonusPerPoint", 0.001, -1.0, 1.0);
+        REP_BONUS_CLAMP = B.comment("Clamp on absolute bonus from reputation (e.g., 0.20 = ±20%).")
+                .defineInRange("bonusClamp", 0.20, 0.0, 1.0);
+        B.pop();
+
         SPEC = B.build();
     }
 
@@ -127,11 +168,24 @@ public final class UpgradeServerConfig {
         public final double exponentialBase;
         public final Map<Integer, Double> chanceOverrides;
 
+        public final double angelStepMult;
+        public final double demonStepMult;
+
+        public final int repMax;
+        public final double repDeltaSuccess;
+        public final double repDeltaFail;
+        public final double repCross;
+        public final double repBonusPerPoint;
+        public final double repBonusClamp;
+
         public final List<AttributeRuleConfig> attributes;
 
         private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
                          double start, double dec, double expBase,
                          Map<Integer, Double> overrides,
+                         double angelMult, double demonMult,
+                         int repMax, double repSucc, double repFail, double repCross,
+                         double repBonusPerPoint, double repBonusClamp,
                          List<AttributeRuleConfig> attrs) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
@@ -140,6 +194,17 @@ public final class UpgradeServerConfig {
             this.decrementPerLevel = dec;
             this.exponentialBase = expBase;
             this.chanceOverrides = overrides;
+
+            this.angelStepMult = angelMult;
+            this.demonStepMult = demonMult;
+
+            this.repMax = repMax;
+            this.repDeltaSuccess = repSucc;
+            this.repDeltaFail = repFail;
+            this.repCross = repCross;
+            this.repBonusPerPoint = repBonusPerPoint;
+            this.repBonusClamp = repBonusClamp;
+
             this.attributes = attrs;
         }
     }
@@ -186,6 +251,16 @@ public final class UpgradeServerConfig {
             double expBase = clamp01(CHANCE_EXP_BASE.get());
             Map<Integer, Double> overrides = parseLevelDoubleMap(CHANCE_OVERRIDES.get(), "chance.overrides");
 
+            double angelMult = Math.max(0.0, RITUAL_ANGEL_STEP_MULT.get());
+            double demonMult = Math.max(0.0, RITUAL_DEMON_STEP_MULT.get());
+
+            int repMax = Math.max(1, REP_MAX.get());
+            double repSucc = REP_DELTA_SUCCESS.get();
+            double repFail = REP_DELTA_FAIL.get();
+            double repCross = Math.max(0.0, REP_CROSS_COUPLING.get());
+            double repBonusPerPoint = REP_BONUS_PER_POINT.get();
+            double repBonusClamp = clamp01(REP_BONUS_CLAMP.get());
+
             List<AttributeRuleConfig> attrs = new ArrayList<>();
             attrs.add(ATTACK_DAMAGE.toRuleConfig());
             attrs.add(ATTACK_SPEED.toRuleConfig());
@@ -194,6 +269,8 @@ public final class UpgradeServerConfig {
             attrs.add(KNOCKBACK_RESISTANCE.toRuleConfig());
 
             return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
+                    angelMult, demonMult,
+                    repMax, repSucc, repFail, repCross, repBonusPerPoint, repBonusClamp,
                     Collections.unmodifiableList(attrs));
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
@@ -203,6 +280,8 @@ public final class UpgradeServerConfig {
                     ChanceModelType.FLAT_DECREMENT,
                     1.0, 0.05, 0.95,
                     Map.of(1, 1.0, 2, 0.95),
+                    1.0, 1.5,
+                    100, 0.1, 0.0, 1.0, 0.001, 0.20,
                     List.of(
                             ATTACK_DAMAGE.fallback(),
                             ATTACK_SPEED.fallback(),
@@ -326,21 +405,10 @@ public final class UpgradeServerConfig {
 
     public static void onServerConfigReload(ModConfigEvent event) {
         LOG.debug("[UpgradeServerConfig] onServerConfigReload: {}", event.getConfig().getFileName());
-        // No special action; methods read from SPEC live values.
     }
 
     // ---- Name color selection ------------------------------------------------------------------
 
-    /**
-     * Returns a ChatFormatting color for displaying the "+N" level suffix.
-     * Driven by general.nameColorRules entries:
-     *  - "A-B=color"  inclusive range
-     *  - "A+=color"   A and above
-     *  - "N=color"    single level
-     *
-     * Valid colors are ChatFormatting names, e.g. "blue", "light_purple", "gold", etc.
-     * Fallback if no rule matches: WHITE.
-     */
     public static ChatFormatting nameColorForLevel(int level) {
         try {
             List<? extends String> rules = NAME_COLOR_RULES.get();
@@ -357,15 +425,8 @@ public final class UpgradeServerConfig {
         return ChatFormatting.WHITE;
     }
 
-    /**
-     * RGB helper for places that want raw color ints (e.g., setting a text style directly).
-     * Uses the same rules as nameColorForLevel.
-     * Returns 0 if no color chosen (caller may apply a default).
-     */
     public static int resolveSuffixColor(int level) {
         ChatFormatting f = nameColorForLevel(level);
-        // Convert a few common colors; for others, just return 0 to let caller default.
-        // You can expand this map if you want exact RGB per ChatFormatting.
         return switch (f) {
             case BLUE -> 0x5555FF;
             case LIGHT_PURPLE -> 0xFF55FF;
@@ -375,7 +436,7 @@ public final class UpgradeServerConfig {
             case DARK_GREEN -> 0x00AA00;
             case RED -> 0xFF5555;
             case WHITE -> 0xFFFFFF;
-            default -> 0; // let caller fall back
+            default -> 0;
         };
     }
 
@@ -388,7 +449,6 @@ public final class UpgradeServerConfig {
         ChatFormatting color = ChatFormatting.getByName(colorName);
         if (color == null) color = ChatFormatting.WHITE;
 
-        // "A-B"
         int dash = left.indexOf('-');
         if (dash > 0) {
             String aStr = left.substring(0, dash).trim();
@@ -401,7 +461,6 @@ public final class UpgradeServerConfig {
             return null;
         }
 
-        // "A+"
         if (left.endsWith("+")) {
             String aStr = left.substring(0, left.length() - 1).trim();
             try {
@@ -411,7 +470,6 @@ public final class UpgradeServerConfig {
             return null;
         }
 
-        // "N"
         try {
             int n = Integer.parseInt(left);
             if (level == n) return color;

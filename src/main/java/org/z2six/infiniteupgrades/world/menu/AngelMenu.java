@@ -3,6 +3,7 @@ package org.z2six.infiniteupgrades.world.menu;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.FriendlyByteBuf;
@@ -23,7 +24,10 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Config;
+import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.logic.Reputation;
+import org.z2six.infiniteupgrades.logic.RitualType;
 import org.z2six.infiniteupgrades.logic.UpgradeService;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 
@@ -32,18 +36,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Angel menu:
- *  - Slot 0: input combat item
- *  - Slot 1: resource (iron ingot)
- *  - Slot 2: OUTPUT/PREVIEW
- *      * Ghost preview while no real result is present.
- *      * Holds REAL infused result on success; user can take it.
+ * Angel/Demon menu (still named AngelMenu for wiring). Context-aware:
+ *  - RitualType.ANGEL -> upgrade *all* eligible attributes each success
+ *  - RitualType.DEMON -> upgrade *one random* eligible attribute each success
  *
- * Important:
- *  - We do NOT track a client/server flag for "resultReady".
- *    Instead, we derive it from the actual content of slot 2:
- *      hasRealResult() = slot2 not empty && !isPreview(slot2)
- *    That way client will never overwrite a real result with a ghost.
+ * Reputation:
+ *  - Applied as extra success chance bonus (server-authoritative).
+ *  - Updated (+/-) on SUCCESS/FAIL attempts, with cross-coupling.
  */
 public class AngelMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
@@ -66,7 +65,7 @@ public class AngelMenu extends AbstractContainerMenu {
     // Button ids
     public static final int BUTTON_INFUSE = 0;
 
-    // Consider these as "combat attributes" for filtering & scaling
+    // Consider these as "combat attributes" for filtering & scaling (preview)
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
             Attributes.ATTACK_DAMAGE,
             Attributes.ATTACK_SPEED,
@@ -94,8 +93,12 @@ public class AngelMenu extends AbstractContainerMenu {
         }
     };
 
-    // Cached preview chance (permille). Client-only display for now.
+    // Cached preview chance (permille). Cosmetic; server is authoritative.
     private int previewChancePermille = 0;
+
+    // ---- Ritual context ----
+    private RitualType ritual = RitualType.ANGEL; // default
+    private BlockPos anchorPos = BlockPos.ZERO;
 
     public AngelMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
@@ -146,7 +149,31 @@ public class AngelMenu extends AbstractContainerMenu {
 
     public AngelMenu(int id, Inventory inv, FriendlyByteBuf buf) {
         this(id, inv);
+        try {
+            // Buf from SigilBlockEntity contains BlockPos
+            BlockPos bp = buf.readBlockPos();
+            this.anchorPos = bp;
+
+            // Derive ritual from block at that position
+            var lvl = inv.player.level();
+            if (lvl != null) {
+                var st = lvl.getBlockState(bp);
+                if (st != null) {
+                    var b = st.getBlock();
+                    if (b == Infiniteupgrades.UNHOLY_SIGIL.get()) {
+                        this.ritual = RitualType.DEMON;
+                    } else {
+                        this.ritual = RitualType.ANGEL;
+                    }
+                }
+            }
+            LOG.debug("[AngelMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
+        } catch (Throwable t) {
+            LOG.error("[AngelMenu] Failed reading ritual context from buf: {}", t.toString());
+        }
     }
+
+    public RitualType ritual() { return ritual; }
 
     @Override
     public boolean stillValid(Player player) {
@@ -156,8 +183,8 @@ public class AngelMenu extends AbstractContainerMenu {
     @Override
     public void slotsChanged(Container container) {
         super.slotsChanged(container);
-        LOG.debug("[AngelMenu] slotsChanged: in={}, res={}, out={}, realOut={}",
-                baseInv.getItem(0), baseInv.getItem(1), baseInv.getItem(2), hasRealResult());
+        LOG.debug("[AngelMenu] slotsChanged: in={}, res={}, out={}, realOut={} (ritual={})",
+                baseInv.getItem(0), baseInv.getItem(1), baseInv.getItem(2), hasRealResult(), ritual);
         updatePreview();
     }
 
@@ -203,28 +230,39 @@ public class AngelMenu extends AbstractContainerMenu {
             }
 
             int cur = parseBaseNameAndLevel(in.getHoverName()).getSecond();
-            double chance = UpgradeService.getSuccessChance(cur);
-            boolean success = player.getRandom().nextDouble() < chance;
 
-            // Always consume one resource on attempt
+            // Base chance from SERVER model
+            double baseChance = UpgradeService.getSuccessChance(cur);
+            // Reputation bonus (server-authoritative)
+            double bonus = Reputation.computeBonusFor(player, ritual);
+            double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
+
+            boolean success = player.getRandom().nextDouble() < finalChance;
+
+            // Consume one resource on attempt
             res.shrink(1);
             baseInv.setItem(1, res);
 
+            // Reputation deltas (attempt-based)
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                Reputation.applyAttemptDelta(sp, ritual, success);
+            } else {
+                LOG.warn("[AngelMenu] applyAttemptDelta skipped: not a ServerPlayer");
+            }
+
             if (success) {
-                UpgradeService.Result r = UpgradeService.tryUpgrade(in, player.getRandom());
+                UpgradeService.Result r = UpgradeService.tryUpgradeWithRitual(in, player.getRandom(), ritual);
                 ItemStack upgraded = r.upgraded();
                 clearPreviewTags(upgraded); // ensure not marked as preview
 
-                LOG.info("[AngelMenu] Infuse SUCCESS at L{} -> placing result into output", cur);
+                LOG.info("[AngelMenu] Infuse SUCCESS at L{} (ritual={}, baseChance={}, bonus={}, final={}) -> put result", cur, ritual, baseChance, bonus, finalChance);
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(0, ItemStack.EMPTY); // consume the input item on success
                     baseInv.setItem(2, upgraded);        // put real result into output
                 });
-                // DO NOT recompute preview; show the real result
                 syncToClient("infuse success");
             } else {
-                LOG.info("[AngelMenu] Infuse FAILED at L{}", cur);
-                // We only consumed resource. Keep input. Recompute ghost preview if still valid.
+                LOG.info("[AngelMenu] Infuse FAILED at L{} (ritual={}, baseChance={}, bonus={}, final={})", cur, ritual, baseChance, bonus, finalChance);
                 syncToClient("infuse fail");
                 updatePreview();
             }
@@ -300,7 +338,7 @@ public class AngelMenu extends AbstractContainerMenu {
 
             // Return everything else (including a REAL result if present)
             this.clearContainer(player, baseInv);
-            LOG.debug("[AngelMenu] Menu closed; returned items to {}", player != null ? player.getName().getString() : "null-player");
+            LOG.debug("[AngelMenu] Menu closed; returned items (ritual={})", ritual);
         } catch (Throwable t) {
             LOG.error("[AngelMenu] removed() failed to clear/return items: {}", t.toString());
         }
@@ -344,15 +382,16 @@ public class AngelMenu extends AbstractContainerMenu {
                 return;
             }
 
-            // Chance for current -> next
+            // Chance for current -> next (preview uses base model; real attempt applies rep bonus)
             double chance = UpgradeService.getSuccessChance(currentLevel);
             previewChancePermille = (int)Math.round(chance * 1000.0);
 
-            // Scale factor for THIS increment (not total). Numbers are obfuscated anyway.
+            // Scale factor for THIS increment (not total). We keep using COMMON tuning here
+            // (server is authoritative on click).
             double step = Config.TUNING.percentBonusForLevelUp(currentLevel);
             double factor = 1.0 + step;
 
-            // Build GHOST preview: clone input, rewrite name to "Base +next", scale combat modifiers
+            // Build GHOST preview by scaling all combat modifiers (as before)
             ItemStack preview = in.copy();
 
             // Name: Base +N (strip any existing suffix first), with SERVER color thresholds
@@ -427,7 +466,6 @@ public class AngelMenu extends AbstractContainerMenu {
             LOG.debug("[AngelMenu] syncToClient: {}", reason);
             this.broadcastChanges();
             try {
-                // In case full resync is needed on your 1.21 environment
                 this.sendAllDataToRemote();
             } catch (Throwable ignored) {}
         } catch (Throwable t) {
