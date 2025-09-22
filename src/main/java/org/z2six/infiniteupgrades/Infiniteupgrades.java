@@ -1,3 +1,4 @@
+// Main Java entrypoint: src/main/java/org/z2six/infiniteupgrades/InfiniteUpgrades.java
 package org.z2six.infiniteupgrades;
 
 // NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.
@@ -161,7 +162,8 @@ public class Infiniteupgrades {
         public static void registerRenderers(final EntityRenderersEvent.RegisterRenderers evt) {
             try {
                 evt.registerEntityRenderer(ModEntityTypes.ANGEL.get(), AngelRenderer::new);
-                evt.registerEntityRenderer(ModEntityTypes.DEMON.get(), DemonRenderer::new); // NEW
+                evt.registerEntityRenderer(ModEntityTypes.DEMON.get(), DemonRenderer::new);
+                evt.registerEntityRenderer(ModEntityTypes.SOUL_ORB.get(), org.z2six.infiniteupgrades.client.SoulOrbRenderer::new);
                 LOGGER.debug("[InfiniteUpgrades] Registered AngelRenderer & DemonRenderer (GeckoLib)");
             } catch (Throwable t) {
                 LOGGER.error("[InfiniteUpgrades] Failed to register entity renderers", t);

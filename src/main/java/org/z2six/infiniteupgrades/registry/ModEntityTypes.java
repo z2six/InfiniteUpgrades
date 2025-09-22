@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/registry/ModEntityTypes.java
 package org.z2six.infiniteupgrades.registry;
 
 import com.mojang.logging.LogUtils;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.world.AngelEntity;
 import org.z2six.infiniteupgrades.world.DemonEntity;
+import org.z2six.infiniteupgrades.world.SoulOrbEntity; // <-- NEW
 
 public final class ModEntityTypes {
     // Debug logger
@@ -40,6 +42,18 @@ public final class ModEntityTypes {
                         .sized(0.6f, 3.6f)
                         .clientTrackingRange(64)
                         .updateInterval(Integer.MAX_VALUE)
+                        .build(id.toString());
+            });
+
+    // NEW: Soul Orb (billboarded, tiny, client-tracked frequently)
+    public static final DeferredHolder<EntityType<?>, EntityType<SoulOrbEntity>> SOUL_ORB =
+            ENTITY_TYPES.register("soul_orb", () -> {
+                LOG.debug("[ModEntityTypes] Building EntityType<SoulOrbEntity>");
+                ResourceLocation id = ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "soul_orb");
+                return EntityType.Builder.<SoulOrbEntity>of(SoulOrbEntity::new, MobCategory.MISC)
+                        .sized(0.3f, 0.3f)
+                        .clientTrackingRange(32)
+                        .updateInterval(2)
                         .build(id.toString());
             });
 
