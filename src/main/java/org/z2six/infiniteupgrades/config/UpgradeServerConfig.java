@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/config/UpgradeServerConfig.java
 package org.z2six.infiniteupgrades.config;
 
 import com.mojang.logging.LogUtils;
@@ -11,29 +12,22 @@ import org.slf4j.Logger;
 import java.util.*;
 
 /**
- * SERVER-side authoritative config for upgrades.
+ * SERVER-side authoritative config for upgrades (+ souls).
  *
  * Structure:
  * - general:
  *     maxLevel: int
- *     upgradeMode: "RANDOM" | "ALL"         (legacy/global; ritual-specific logic overrides this)
+ *     upgradeMode: "RANDOM" | "ALL" (legacy/global; ritual-specific logic overrides this)
  *     nameColorRules: [...]
  * - chance:
  *     model: "FLAT_DECREMENT" | "EXPONENTIAL"
  *     startChance, decrementPerLevel, exponentialBase
  *     overrides: "level=chance"
  * - rituals:
- *     angelStepMultiplier: double (e.g. 1.0)
- *     demonStepMultiplier: double (e.g. 1.5)
- * - reputation:
- *     max: int (absolute cap, symmetric)
- *     deltaOnSuccess: double (e.g. 0.1)
- *     deltaOnFail: double (e.g. 0.0)
- *     crossCoupling: double (1.0 => opposite side gets -delta*1.0)
- *     bonusPerPoint: double (e.g., 0.001 => +0.1% per point)
- *     bonusClamp: double (e.g., 0.20 => max +20%)
- * - attributes (defaults): see AttributeSection below
- * - attributesDynamic.rules (NEW): user-specified rules for ANY attribute id, format documented in comments
+ *     angelStepMultiplier, demonStepMultiplier
+ * - reputation: ...
+ * - attributes (defaults) + attributesDynamic.rules
+ * - souls (NEW): server-authoritative soul-orb drop rules
  */
 public final class UpgradeServerConfig {
     private static final Logger LOG = LogUtils.getLogger();
@@ -72,7 +66,23 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec.DoubleValue REP_BONUS_PER_POINT;
     public static final ModConfigSpec.DoubleValue REP_BONUS_CLAMP;
 
-    // defaults (vanilla) attribute sections
+    // user-defined dynamic attribute rules
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> CUSTOM_ATTR_RULES;
+
+    // ---- souls (NEW) ----
+    public static final ModConfigSpec.BooleanValue SOULS_ENABLED;
+    public static final ModConfigSpec.DoubleValue SOULS_DROP_CHANCE;
+    public static final ModConfigSpec.DoubleValue SOULS_HP_RATIO;
+    public static final ModConfigSpec.IntValue SOULS_MIN_UNITS_FOR_DROP;
+    public static final ModConfigSpec.IntValue SOULS_LIFETIME_SECONDS;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> SOULS_TIER_UNITS; // "SMALL=1" etc.
+    public static final ModConfigSpec.BooleanValue SOULS_ALLOW_PVP;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> SOULS_WHITELIST_ENTITIES;
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> SOULS_BLACKLIST_ENTITIES;
+
+    public static final ModConfigSpec SPEC;
+
+    // defaults (vanilla) attribute sections -------
     public static final AttributeSection ATTACK_DAMAGE =
             new AttributeSection(B, "minecraft", "generic", "attack_damage",
                     true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -103,12 +113,8 @@ public final class UpgradeServerConfig {
                     List.of(), 0.0, 1.0,
                     false, 0.0);
 
-    // user-defined dynamic attribute rules
-    public static final ModConfigSpec.ConfigValue<List<? extends String>> CUSTOM_ATTR_RULES;
-
-    public static final ModConfigSpec SPEC;
-
     static {
+        // ----- GENERAL -----
         B.push("general");
         GENERAL_MAX_LEVEL = B.comment("Maximum enhancement level.")
                 .defineInRange("maxLevel", 20, 0, 1000);
@@ -122,6 +128,7 @@ public final class UpgradeServerConfig {
                         o -> o instanceof String);
         B.pop();
 
+        // ----- CHANCE -----
         B.push("chance");
         CHANCE_MODEL = B.comment("Chance model type.")
                 .defineEnum("model", ChanceModelType.FLAT_DECREMENT);
@@ -135,6 +142,7 @@ public final class UpgradeServerConfig {
                 .defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
         B.pop();
 
+        // ----- RITUALS -----
         B.push("rituals");
         RITUAL_ANGEL_STEP_MULT = B.comment("Multiplier for Angel step size (applied to per-level rule step).")
                 .defineInRange("angelStepMultiplier", 1.0, 0.0, 100.0);
@@ -142,6 +150,7 @@ public final class UpgradeServerConfig {
                 .defineInRange("demonStepMultiplier", 1.5, 0.0, 100.0);
         B.pop();
 
+        // ----- REPUTATION -----
         B.push("reputation");
         REP_MAX = B.comment("Absolute max magnitude of reputation for either side (symmetric).")
                 .defineInRange("max", 100, 1, 100000);
@@ -157,7 +166,7 @@ public final class UpgradeServerConfig {
                 .defineInRange("bonusClamp", 0.20, 0.0, 1.0);
         B.pop();
 
-        // ---- Dynamic rules input ----
+        // ----- Dynamic rules input -----
         B.push("attributesDynamic");
         CUSTOM_ATTR_RULES = B.comment(
                 "Add custom attribute rules (ANY attribute id) – one rule per line.",
@@ -169,6 +178,31 @@ public final class UpgradeServerConfig {
                 "  coolmod:magic_damage; stepType=PERCENT; direction=INCREASE; defaultStep=0.03; weight=12; rounding=0.01",
                 "  minecraft:generic.attack_speed; stepType=PERCENT; direction=DECREASE; defaultStep=0.05; applyToMagnitude=true"
         ).defineListAllowEmpty("rules", List.of(), o -> o instanceof String);
+        B.pop();
+
+        // ----- SOULS (NEW) -----
+        B.push("souls");
+        SOULS_ENABLED = B.comment("Enable soul orb drops.")
+                .define("enabled", true);
+        SOULS_DROP_CHANCE = B.comment("Chance (0..1) that a soul orb drops when eligible.")
+                .defineInRange("dropChance", 1.0, 0.0, 1.0);
+        SOULS_HP_RATIO = B.comment("Units = floor(max_hp * hpToSoulsRatio). Largest tier <= units will drop.")
+                .defineInRange("hpToSoulsRatio", 0.75, 0.0, 1000.0);
+        SOULS_MIN_UNITS_FOR_DROP = B.comment("Minimum units required to drop any orb. If units < min, no drop.")
+                .defineInRange("minUnitsForDrop", 1, 0, 1_000_000);
+        SOULS_LIFETIME_SECONDS = B.comment("Orb lifetime in seconds.")
+                .defineInRange("lifetimeSeconds", 30, 1, 3_600);
+        SOULS_TIER_UNITS = B.comment("Tier unit mapping. Format: \"TIER=units\". TIER one of SMALL,MEDIUM,LARGE,EXTRA_LARGE.",
+                        "Default: [\"SMALL=1\",\"MEDIUM=4\",\"LARGE=8\",\"EXTRA_LARGE=16\"]")
+                .defineListAllowEmpty("tierUnits",
+                        List.of("SMALL=1", "MEDIUM=4", "LARGE=8", "EXTRA_LARGE=16"),
+                        o -> o instanceof String);
+        SOULS_ALLOW_PVP = B.comment("Allow orb drops from player deaths (PvP or otherwise).")
+                .define("allowPvP", false);
+        SOULS_WHITELIST_ENTITIES = B.comment("Whitelist of entity IDs allowed to drop orbs. If non-empty, only listed IDs drop. Example: [\"minecraft:zombie\"]")
+                .defineListAllowEmpty("whitelistEntities", List.of(), o -> o instanceof String);
+        SOULS_BLACKLIST_ENTITIES = B.comment("Blacklist of entity IDs that must NOT drop orbs.")
+                .defineListAllowEmpty("blacklistEntities", List.of(), o -> o instanceof String);
         B.pop();
 
         SPEC = B.build();
@@ -198,13 +232,16 @@ public final class UpgradeServerConfig {
 
         public final List<AttributeRuleConfig> attributes; // defaults + dynamic
 
+        public final SoulsConfig souls; // NEW
+
         private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
                          double start, double dec, double expBase,
                          Map<Integer, Double> overrides,
                          double angelMult, double demonMult,
                          int repMax, double repSucc, double repFail, double repCross,
                          double repBonusPerPoint, double repBonusClamp,
-                         List<AttributeRuleConfig> attrs) {
+                         List<AttributeRuleConfig> attrs,
+                         SoulsConfig souls) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
             this.chanceModel = cm;
@@ -224,6 +261,38 @@ public final class UpgradeServerConfig {
             this.repBonusClamp = repBonusClamp;
 
             this.attributes = attrs;
+            this.souls = souls;
+        }
+    }
+
+    public static final class SoulsConfig {
+        public final boolean enabled;
+        public final double dropChance;
+        public final double hpToSoulsRatio;
+        public final int minUnitsForDrop;
+        public final int lifetimeSeconds;
+        public final Map<String, Integer> tierUnits; // key = TIER name
+        public final boolean allowPvP;
+        public final Set<ResourceLocation> whitelist;
+        public final Set<ResourceLocation> blacklist;
+
+        public SoulsConfig(boolean enabled, double dropChance, double hpToSoulsRatio, int minUnitsForDrop,
+                           int lifetimeSeconds, Map<String, Integer> tierUnits, boolean allowPvP,
+                           Set<ResourceLocation> whitelist, Set<ResourceLocation> blacklist) {
+            this.enabled = enabled;
+            this.dropChance = dropChance;
+            this.hpToSoulsRatio = hpToSoulsRatio;
+            this.minUnitsForDrop = minUnitsForDrop;
+            this.lifetimeSeconds = lifetimeSeconds;
+            this.tierUnits = tierUnits;
+            this.allowPvP = allowPvP;
+            this.whitelist = whitelist;
+            this.blacklist = blacklist;
+        }
+
+        public int tierUnitsOrDefault(String tierName, int def) {
+            Integer v = tierUnits.get(tierName);
+            return v != null && v > 0 ? v : def;
         }
     }
 
@@ -289,10 +358,13 @@ public final class UpgradeServerConfig {
             // Append dynamic rules
             attrs.addAll(parseCustomRules(CUSTOM_ATTR_RULES.get()));
 
+            SoulsConfig souls = buildSoulsConfig();
+
             return new Snapshot(mode, maxLvl, model, start, dec, expBase, overrides,
                     angelMult, demonMult,
                     repMax, repSucc, repFail, repCross, repBonusPerPoint, repBonusClamp,
-                    Collections.unmodifiableList(attrs));
+                    Collections.unmodifiableList(attrs),
+                    souls);
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
             return new Snapshot(
@@ -309,9 +381,65 @@ public final class UpgradeServerConfig {
                             ARMOR.fallback(),
                             ARMOR_TOUGHNESS.fallback(),
                             KNOCKBACK_RESISTANCE.fallback()
+                    ),
+                    new SoulsConfig(
+                            true, 1.0, 0.75, 1, 30,
+                            Map.of("SMALL",1,"MEDIUM",4,"LARGE",8,"EXTRA_LARGE",16),
+                            false, Set.of(), Set.of()
                     )
             );
         }
+    }
+
+    private static SoulsConfig buildSoulsConfig() {
+        boolean enabled = SOULS_ENABLED.get();
+        double dropChance = clamp01(SOULS_DROP_CHANCE.get());
+        double hpRatio = Math.max(0.0, SOULS_HP_RATIO.get());
+        int minUnits = Math.max(0, SOULS_MIN_UNITS_FOR_DROP.get());
+        int lifeSec = Math.max(1, SOULS_LIFETIME_SECONDS.get());
+
+        Map<String,Integer> tierUnits = parseTierUnits(SOULS_TIER_UNITS.get());
+        if (tierUnits.isEmpty()) {
+            tierUnits = Map.of("SMALL",1,"MEDIUM",4,"LARGE",8,"EXTRA_LARGE",16);
+        } else {
+            tierUnits = Collections.unmodifiableMap(tierUnits);
+        }
+
+        boolean allowPvP = SOULS_ALLOW_PVP.get();
+        Set<ResourceLocation> white = parseIdSet(SOULS_WHITELIST_ENTITIES.get());
+        Set<ResourceLocation> black = parseIdSet(SOULS_BLACKLIST_ENTITIES.get());
+
+        return new SoulsConfig(enabled, dropChance, hpRatio, minUnits, lifeSec, tierUnits, allowPvP, white, black);
+    }
+
+    private static Map<String,Integer> parseTierUnits(@Nullable List<? extends String> list) {
+        Map<String,Integer> out = new LinkedHashMap<>();
+        if (list == null) return out;
+        for (Object o : list) {
+            if (!(o instanceof String s)) continue;
+            String t = s.trim();
+            int eq = t.indexOf('=');
+            if (eq <= 0 || eq >= t.length()-1) continue;
+            String key = t.substring(0, eq).trim().toUpperCase(Locale.ROOT);
+            String val = t.substring(eq+1).trim();
+            try {
+                int n = Integer.parseInt(val);
+                if (n > 0) out.put(key, n);
+            } catch (NumberFormatException ignored) {}
+        }
+        return out;
+    }
+
+    private static Set<ResourceLocation> parseIdSet(@Nullable List<? extends String> list) {
+        if (list == null || list.isEmpty()) return Set.of();
+        Set<ResourceLocation> out = new LinkedHashSet<>();
+        for (Object o : list) {
+            if (!(o instanceof String s)) continue;
+            String t = s.trim();
+            if (t.isEmpty()) continue;
+            try { out.add(ResourceLocation.parse(t)); } catch (Throwable ignored) {}
+        }
+        return Collections.unmodifiableSet(out);
     }
 
     private static Map<Integer, Double> parseOverridesKV(String s) {
@@ -507,7 +635,7 @@ public final class UpgradeServerConfig {
 
     // ---- Name color selection ------------------------------------------------------------------
 
-    public static ChatFormatting nameColorForLevel(int level) {
+    public static net.minecraft.ChatFormatting nameColorForLevel(int level) {
         try {
             List<? extends String> rules = NAME_COLOR_RULES.get();
             if (rules != null) {
