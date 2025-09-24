@@ -1,3 +1,4 @@
+// file: src/main/java/org/z2six/infiniteupgrades/client/SoulOrbRenderer.java
 package org.z2six.infiniteupgrades.client;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -13,10 +14,13 @@ import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.Mth;
 import org.z2six.infiniteupgrades.world.SoulOrbEntity;
 
+import java.util.EnumMap;
 import java.util.Locale;
+import java.util.Map;
 
 public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
@@ -25,8 +29,22 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
     private static final boolean LOG_RENDER = true;
     private static final int     LOG_EVERY  = 20; // ticks per entity
 
+    // Fallback white (we tint it)
     private static final ResourceLocation WHITE_TEX =
             ResourceLocation.fromNamespaceAndPath("minecraft", "textures/misc/white.png");
+
+    // Your optional soul textures
+    private static final ResourceLocation SOUL_SMALL =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/entity/soul_orb/soul_small.png");
+    private static final ResourceLocation SOUL_MEDIUM =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/entity/soul_orb/soul_medium.png");
+    private static final ResourceLocation SOUL_LARGE =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/entity/soul_orb/soul_large.png");
+    private static final ResourceLocation SOUL_XL =
+            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/entity/soul_orb/soul_extra_large.png");
+
+    // Cache: hasTexture per tier (null = not checked yet)
+    private static final Map<SoulOrbEntity.Tier, Boolean> HAS_TEX = new EnumMap<>(SoulOrbEntity.Tier.class);
 
     public SoulOrbRenderer(EntityRendererProvider.Context ctx) {
         super(ctx);
@@ -35,10 +53,13 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
     @Override
     public ResourceLocation getTextureLocation(SoulOrbEntity entity) {
+        // For vanilla systems that query this, return the *best* texture (or white fallback).
+        ResourceLocation rl = textureFor(entity.getTier());
+        if (hasTexture(entity.getTier(), rl)) return rl;
         return WHITE_TEX;
     }
 
-    // We’ll let vanilla frustum checks run, but we’ll LOG what it would do.
+    // Log frustum decision so we can see when it’s culled vs shown.
     @Override
     public boolean shouldRender(SoulOrbEntity e, Frustum frustum, double camX, double camY, double camZ) {
         boolean result = super.shouldRender(e, frustum, camX, camY, camZ);
@@ -74,7 +95,7 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
         pose.pushPose();
 
-        // Billboard & flip (same as original working pipeline)
+        // Face camera & flip (same as your working pipeline)
         pose.mulPose(this.entityRenderDispatcher.cameraOrientation());
         pose.mulPose(Axis.YP.rotationDegrees(180.0F));
 
@@ -85,35 +106,88 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         float s = base * pulse;
         pose.scale(s, s, s);
 
-        // Tier tint (RGBA 0..255)
-        float[] c = colorForTier(orb.getTier());
-        int r = (int)(Mth.clamp(c[0], 0f, 1f) * 255f);
-        int g = (int)(Mth.clamp(c[1], 0f, 1f) * 255f);
-        int b = (int)(Mth.clamp(c[2], 0f, 1f) * 255f);
-        int a = (int)(0.90f * 255f);
-
-        // Force fullbright
+        // Fullbright so they pop in dark areas
         final int fullBright = 0xF000F0;
 
-        VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucent(WHITE_TEX));
-        PoseStack.Pose last = pose.last();
+        // Try textured first; if missing, draw tinted quad (your current behavior).
+        SoulOrbEntity.Tier tier = orb.getTier();
+        ResourceLocation tex = textureFor(tier);
 
-        // FRONT (+Z)
-        put(vc, last, -0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
-        put(vc, last,  0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
-        put(vc, last,  0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
-        put(vc, last, -0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
+        if (hasTexture(tier, tex)) {
+            // Textured billboard; we *don’t* tint so your pixel colors show as-is
+            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucent(tex));
+            PoseStack.Pose last = pose.last();
 
-        // BACK (-Z)
-        put(vc, last, -0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-        put(vc, last,  0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-        put(vc, last,  0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
-        put(vc, last, -0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            int r = 255, g = 255, b = 255, a = (int)(0.95f * 255f);
+
+            // FRONT (+Z)
+            put(vc, last, -0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last,  0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last,  0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last, -0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
+
+            // BACK (-Z) — reversed UV for consistency
+            put(vc, last, -0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last,  0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last,  0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last, -0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
+        } else {
+            // Fallback: tinted quad with WHITE_TEX (what you had working)
+            float[] c = colorForTier(tier);
+            int r = (int)(Mth.clamp(c[0], 0f, 1f) * 255f);
+            int g = (int)(Mth.clamp(c[1], 0f, 1f) * 255f);
+            int b = (int)(Mth.clamp(c[2], 0f, 1f) * 255f);
+            int a = (int)(0.90f * 255f);
+
+            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucent(WHITE_TEX));
+            PoseStack.Pose last = pose.last();
+
+            // FRONT (+Z)
+            put(vc, last, -0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last,  0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last,  0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
+            put(vc, last, -0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
+
+            // BACK (-Z)
+            put(vc, last, -0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last,  0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last,  0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
+            put(vc, last, -0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
+        }
 
         pose.popPose();
     }
 
-    private static String fmt(double v) { return String.format(Locale.ROOT, "%.3f", v); }
+    // ------------------------------------------------------------------------------------------------
+
+    private static ResourceLocation textureFor(SoulOrbEntity.Tier t) {
+        return switch (t) {
+            case SMALL       -> SOUL_SMALL;
+            case MEDIUM      -> SOUL_MEDIUM;
+            case LARGE       -> SOUL_LARGE;
+            case EXTRA_LARGE -> SOUL_XL;
+        };
+    }
+
+    private static boolean hasTexture(SoulOrbEntity.Tier t, ResourceLocation rl) {
+        Boolean cached = HAS_TEX.get(t);
+        if (cached != null) return cached;
+
+        // Lazy detect once. If client is null (very early), be conservative: say false so we draw fallback.
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            HAS_TEX.put(t, Boolean.FALSE);
+            return false;
+        }
+        ResourceManager rm = mc.getResourceManager();
+        boolean present = rm.getResource(rl).isPresent();
+        HAS_TEX.put(t, present);
+
+        if (LOG_RENDER) {
+            LOG.info("[SoulOrbRenderer] texture check: tier={}, rl={}, present={}", t, rl, present);
+        }
+        return present;
+    }
 
     private static void put(VertexConsumer vc,
                             PoseStack.Pose pose,
@@ -139,4 +213,6 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
             case EXTRA_LARGE -> new float[]{1.00f, 0.40f, 0.30f}; // red-orange
         };
     }
+
+    private static String fmt(double v) { return String.format(Locale.ROOT, "%.3f", v); }
 }
