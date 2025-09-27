@@ -2,6 +2,7 @@
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -13,6 +14,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
+import org.z2six.infiniteupgrades.util.LightScheduler;
 
 import java.util.Locale;
 
@@ -21,21 +23,24 @@ public class SoulOrbEntity extends Entity {
 
     // log switches
     private static final boolean LOG_SPAWN  = true;
-    private static final boolean LOG_TICKS  = true;   // periodic
-    private static final int     LOG_EVERY  = 20;     // ticks
+    private static final boolean LOG_TICKS  = false;
+    private static final int     LOG_EVERY  = 20;
 
     public enum Tier { SMALL, MEDIUM, LARGE, EXTRA_LARGE }
 
     private static final EntityDataAccessor<Integer> DATA_TIER =
             SynchedEntityData.defineId(SoulOrbEntity.class, EntityDataSerializers.INT);
 
-    private int lifetime = 20 * 30; // 30 seconds
+    private int lifetime = 20 * 30; // default 30 seconds, configurable via spawner
 
     // Hover state
-    private double hoverBaseY;           // y around which we bob
-    private float hoverPhaseOffset;      // per-orb phase
-    private float hoverSpeed = 0.08f;    // radians/tick
-    private float hoverAmplitude = 0.08f;// blocks
+    private double hoverBaseY;
+    private float hoverPhaseOffset;
+    private float hoverSpeed = 0.08f;
+    private float hoverAmplitude = 0.08f;
+
+    // Where we placed the static light (queued via LightScheduler)
+    private BlockPos lightPos = null;
 
     public SoulOrbEntity(EntityType<? extends SoulOrbEntity> type, net.minecraft.world.level.Level level) {
         super(type, level);
@@ -60,10 +65,9 @@ public class SoulOrbEntity extends Entity {
 
         if (LOG_SPAWN && !level.isClientSide) {
             var bb = this.getBoundingBox();
-            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
+            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, dim={}, pos=({},{},{}), life={}t, size=({},{})",
                     this.getId(), tier, level.dimension().location(),
                     fmt(pos.x), fmt(pos.y), fmt(pos.z), lifetimeTicks,
-                    fmt(bb.minX), fmt(bb.minY), fmt(bb.maxX), fmt(bb.maxY),
                     fmt(bb.getXsize()), fmt(bb.getYsize()));
         }
     }
@@ -83,6 +87,11 @@ public class SoulOrbEntity extends Entity {
         if (tag.contains("HoverSpeed")) this.hoverSpeed = tag.getFloat("HoverSpeed");
         if (tag.contains("HoverAmp"))   this.hoverAmplitude = tag.getFloat("HoverAmp");
         if (tag.contains("HoverPhase")) this.hoverPhaseOffset = tag.getFloat("HoverPhase");
+
+        if (tag.contains("LightX")) {
+            this.lightPos = new BlockPos(tag.getInt("LightX"), tag.getInt("LightY"), tag.getInt("LightZ"));
+        }
+
         this.refreshDimensions();
     }
 
@@ -94,6 +103,12 @@ public class SoulOrbEntity extends Entity {
         tag.putFloat("HoverSpeed", this.hoverSpeed);
         tag.putFloat("HoverAmp", this.hoverAmplitude);
         tag.putFloat("HoverPhase", this.hoverPhaseOffset);
+
+        if (this.lightPos != null) {
+            tag.putInt("LightX", this.lightPos.getX());
+            tag.putInt("LightY", this.lightPos.getY());
+            tag.putInt("LightZ", this.lightPos.getZ());
+        }
     }
 
     @Override
@@ -101,7 +116,7 @@ public class SoulOrbEntity extends Entity {
         super.tick();
 
         if (this.tickCount > this.lifetime) {
-            if (!level().isClientSide) {
+            if (!level().isClientSide && LOG_SPAWN) {
                 LOG.info("[SoulOrbEntity] discard: id={}, age={}t/life={}t, lastPos=({},{},{})",
                         this.getId(), this.tickCount, this.lifetime,
                         fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()));
@@ -121,8 +136,19 @@ public class SoulOrbEntity extends Entity {
             this.setPos(x, y, z);
         }
 
-        // ---- CLIENT: do NOT touch position ----
-        // Let vanilla interpolation render the server-updated position.
+        if (LOG_TICKS && (this.tickCount % LOG_EVERY) == 0 && !level().isClientSide) {
+            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), lifeLeft={}t",
+                    this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()), (this.lifetime - this.tickCount));
+        }
+    }
+
+    @Override
+    public void onRemovedFromLevel() {
+        super.onRemovedFromLevel();
+        if (this.lightPos != null && this.level() instanceof net.minecraft.server.level.ServerLevel sl) {
+            LightScheduler.queueRemove(sl, this.lightPos);
+            this.lightPos = null;
+        }
     }
 
     /** Let spawner fix our exact hover center. */
@@ -135,16 +161,35 @@ public class SoulOrbEntity extends Entity {
         }
     }
 
-    // Slight inflation for safety (these are helpers in 1.21.1; no @Override)
+    public void setLightPos(BlockPos pos) { this.lightPos = pos; }
+
+    // ---- Fade-out support ----------------------------------------------------
+
+    /** Total lifetime in ticks. */
+    public int getLifetimeTicks() { return this.lifetime; }
+
+    /**
+     * Returns a [0..1] factor to fade visuals as the orb approaches despawn.
+     * @param partialTick       render partial tick
+     * @param fadeWindowTicks   how long (in ticks) the fade should last; commonly 200 (=10s)
+     */
+    public float fadeFactor(float partialTick, int fadeWindowTicks) {
+        final float age = this.tickCount + Mth.clamp(partialTick, 0f, 1f);
+        final int life = Math.max(1, this.lifetime);
+        final int window = Mth.clamp(fadeWindowTicks, 1, life);
+        final float remaining = life - age;
+        if (remaining <= 0f) return 0f;
+        if (remaining >= window) return 1f;
+        return Mth.clamp(remaining / (float) window, 0f, 1f);
+    }
+
+    // Slight inflation for safety (helpers in 1.21.1; no @Override)
     public AABB getBoundingBoxForCulling() { return super.getBoundingBox().inflate(0.15); }
     public AABB getRenderBoundingBox()     { return this.getBoundingBox().inflate(0.15); }
 
     @Override
-    public boolean shouldRenderAtSqrDistance(double dist) {
-        return dist < 16384.0D; // ~128 blocks
-    }
+    public boolean shouldRenderAtSqrDistance(double dist) { return dist < 16384.0D; } // ~128 blocks
 
-    // Render helpers
     public float baseQuadSize() {
         return switch (getTier()) {
             case SMALL       -> 0.28f;
@@ -154,7 +199,6 @@ public class SoulOrbEntity extends Entity {
         };
     }
 
-    // Tier sync
     public Tier getTier() {
         int ord = getTierOrdinal();
         return Tier.values()[Mth.clamp(ord, 0, Tier.values().length - 1)];

@@ -2,6 +2,7 @@
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -16,6 +17,7 @@ import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.util.LightScheduler;
 import org.z2six.infiniteupgrades.world.SoulOrbEntity;
 
 import java.util.Comparator;
@@ -26,7 +28,6 @@ import java.util.Map;
 public final class SoulDrops {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // logging verbosity switches
     private static final boolean LOG_DECISIONS = true;
     private static final boolean LOG_SUCCESS   = true;
 
@@ -64,13 +65,11 @@ public final class SoulDrops {
                 return;
             }
 
-            // PvP gating
             if (victim instanceof Player && !cfg.allowPvP) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: victim is player and allowPvP=false");
                 return;
             }
 
-            // Entity whitelist/blacklist
             if (!cfg.whitelist.isEmpty() && !cfg.whitelist.contains(entId)) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: {} not in whitelist", entId);
                 return;
@@ -80,12 +79,10 @@ public final class SoulDrops {
                 return;
             }
 
-            // Roll chance
             RandomSource r = victim.getRandom();
             double roll = r.nextDouble();
             if (LOG_DECISIONS) {
-                LOG.info("[SoulDrops] chance: roll={}, threshold={}",
-                        fmt(roll), fmt(cfg.dropChance));
+                LOG.info("[SoulDrops] chance: roll={}, threshold={}", fmt(roll), fmt(cfg.dropChance));
             }
             if (roll > cfg.dropChance) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: chance roll failed");
@@ -103,7 +100,6 @@ public final class SoulDrops {
                 return;
             }
 
-            // Pick a single tier: largest whose unitValue <= units
             SoulOrbEntity.Tier tier = pickTier(cfg, units);
             if (tier == null) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: no tier <= units");
@@ -112,14 +108,23 @@ public final class SoulDrops {
 
             int lifetimeTicks = Math.max(1, cfg.lifetimeSeconds) * 20;
 
-            // Position: around victim's feet + safe hover offset
             Vec3 anchor = victim.position();
             double dx = (r.nextDouble() - 0.5) * RAND_H_RANGE;
             double dz = (r.nextDouble() - 0.5) * RAND_H_RANGE;
             double y = anchor.y + hoverOffsetY(victim);
             Vec3 at = new Vec3(anchor.x + dx, y, anchor.z + dz);
 
-            // Log spawn decision
+            var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
+            orb.setHoverBaseY(y);
+            lvl.addFreshEntity(orb);
+
+            // Queue light for end-of-tick processing (safe & batched)
+            if (lvl instanceof ServerLevel sl) {
+                BlockPos lightAt = BlockPos.containing(at);
+                LightScheduler.queuePlace(sl, lightAt, 4); // ≈3-block reach
+                orb.setLightPos(lightAt);
+            }
+
             if (LOG_SUCCESS) {
                 LOG.info("[SoulDrops] SPAWN: dim={}, entityId={}, entityType={}, tier={}, units={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
                         dim, victim.getId(), entId, tier, units, lifetimeTicks,
@@ -128,21 +133,6 @@ public final class SoulDrops {
                         fmt(dx), fmt(dz));
             }
 
-            // Spawn
-            var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
-            orb.setHoverBaseY(y);
-            lvl.addFreshEntity(orb);
-
-            // Extra server-side details after add (AABB etc.)
-            if (LOG_SUCCESS) {
-                var bb = orb.getBoundingBox();
-                LOG.info("[SoulDrops] added: orbId={}, aabb=({}, {}, {}, {}), size=({},{})",
-                        orb.getId(),
-                        fmt(bb.minX), fmt(bb.minY), fmt(bb.maxX), fmt(bb.maxY),
-                        fmt(bb.getXsize()), fmt(bb.getYsize()));
-            }
-
-            // Visibility ping: small sparkle cluster at spawn
             if (lvl instanceof ServerLevel sl) {
                 sl.sendParticles(ParticleTypes.END_ROD, at.x, at.y, at.z, 12, 0.05, 0.05, 0.05, 0.02);
             }
@@ -181,7 +171,6 @@ public final class SoulDrops {
                 if (entry.getValue() <= units) return entry.getKey();
             }
         }
-
         return best;
     }
 

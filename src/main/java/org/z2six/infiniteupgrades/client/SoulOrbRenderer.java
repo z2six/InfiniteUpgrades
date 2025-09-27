@@ -26,14 +26,18 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
     private static final Logger LOG = LogUtils.getLogger();
 
-    private static final boolean LOG_RENDER = true;
+    // Turn off per-frame spam
+    private static final boolean LOG_RENDER = false;
     private static final int     LOG_EVERY  = 20; // ticks per entity
+
+    // Fade during the last 10 seconds
+    private static final int FADE_WINDOW_TICKS = 200;
 
     // Fallback white (we tint it)
     private static final ResourceLocation WHITE_TEX =
             ResourceLocation.fromNamespaceAndPath("minecraft", "textures/misc/white.png");
 
-    // Your optional soul textures
+    // Optional soul textures
     private static final ResourceLocation SOUL_SMALL =
             ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/entity/soul_orb/soul_small.png");
     private static final ResourceLocation SOUL_MEDIUM =
@@ -53,13 +57,11 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
     @Override
     public ResourceLocation getTextureLocation(SoulOrbEntity entity) {
-        // For vanilla systems that query this, return the *best* texture (or white fallback).
         ResourceLocation rl = textureFor(entity.getTier());
         if (hasTexture(entity.getTier(), rl)) return rl;
         return WHITE_TEX;
     }
 
-    // Log frustum decision so we can see when it’s culled vs shown.
     @Override
     public boolean shouldRender(SoulOrbEntity e, Frustum frustum, double camX, double camY, double camZ) {
         boolean result = super.shouldRender(e, frustum, camX, camY, camZ);
@@ -95,7 +97,7 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
 
         pose.pushPose();
 
-        // Face camera & flip (same as your working pipeline)
+        // Face camera & flip (billboard)
         pose.mulPose(this.entityRenderDispatcher.cameraOrientation());
         pose.mulPose(Axis.YP.rotationDegrees(180.0F));
 
@@ -109,50 +111,41 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         // Fullbright so they pop in dark areas
         final int fullBright = 0xF000F0;
 
-        // Try textured first; if missing, draw tinted quad (your current behavior).
+        // Fade factor (1 → 0 over last 10s)
+        final float fade = orb.fadeFactor(partialTick, FADE_WINDOW_TICKS);
+
         SoulOrbEntity.Tier tier = orb.getTier();
         ResourceLocation tex = textureFor(tier);
 
         if (hasTexture(tier, tex)) {
-            // Textured billboard; we *don’t* tint so your pixel colors show as-is
-            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucent(tex));
+            // Emissive textured billboard (single face -> no z-fight)
+            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucentEmissive(tex));
             PoseStack.Pose last = pose.last();
 
-            int r = 255, g = 255, b = 255, a = (int)(0.95f * 255f);
+            int r = 255, g = 255, b = 255;
+            int a = (int)(Mth.clamp(0.95f * fade, 0f, 1f) * 255f);
 
-            // FRONT (+Z)
+            // FRONT (+Z) ONLY
             put(vc, last, -0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last,  0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last,  0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last, -0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
-
-            // BACK (-Z) — reversed UV for consistency
-            put(vc, last, -0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last,  0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last,  0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last, -0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
         } else {
-            // Fallback: tinted quad with WHITE_TEX (what you had working)
+            // Fallback: emissive tinted quad with WHITE_TEX
             float[] c = colorForTier(tier);
             int r = (int)(Mth.clamp(c[0], 0f, 1f) * 255f);
             int g = (int)(Mth.clamp(c[1], 0f, 1f) * 255f);
             int b = (int)(Mth.clamp(c[2], 0f, 1f) * 255f);
-            int a = (int)(0.90f * 255f);
+            int a = (int)(Mth.clamp(0.90f * fade, 0f, 1f) * 255f);
 
-            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucent(WHITE_TEX));
+            VertexConsumer vc = buffers.getBuffer(RenderType.entityTranslucentEmissive(WHITE_TEX));
             PoseStack.Pose last = pose.last();
 
-            // FRONT (+Z)
+            // FRONT (+Z) ONLY
             put(vc, last, -0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last,  0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last,  0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
             put(vc, last, -0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f,  1f);
-
-            // BACK (-Z)
-            put(vc, last, -0.5f,  0.5f, 0f, 1f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last,  0.5f,  0.5f, 0f, 0f, 0f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last,  0.5f, -0.5f, 0f, 0f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
-            put(vc, last, -0.5f, -0.5f, 0f, 1f, 1f, r, g, b, a, fullBright, 0f, 0f, -1f);
         }
 
         pose.popPose();
@@ -173,7 +166,6 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         Boolean cached = HAS_TEX.get(t);
         if (cached != null) return cached;
 
-        // Lazy detect once. If client is null (very early), be conservative: say false so we draw fallback.
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) {
             HAS_TEX.put(t, Boolean.FALSE);

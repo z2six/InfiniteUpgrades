@@ -69,7 +69,7 @@ public final class UpgradeServerConfig {
     // user-defined dynamic attribute rules
     public static final ModConfigSpec.ConfigValue<List<? extends String>> CUSTOM_ATTR_RULES;
 
-    // ---- souls (NEW) ----
+    // ---- souls ----
     public static final ModConfigSpec.BooleanValue SOULS_ENABLED;
     public static final ModConfigSpec.DoubleValue SOULS_DROP_CHANCE;
     public static final ModConfigSpec.DoubleValue SOULS_HP_RATIO;
@@ -180,7 +180,7 @@ public final class UpgradeServerConfig {
         ).defineListAllowEmpty("rules", List.of(), o -> o instanceof String);
         B.pop();
 
-        // ----- SOULS (NEW) -----
+        // ----- SOULS -----
         B.push("souls");
         SOULS_ENABLED = B.comment("Enable soul orb drops.")
                 .define("enabled", true);
