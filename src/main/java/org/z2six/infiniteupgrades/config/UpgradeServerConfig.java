@@ -14,6 +14,7 @@ import org.z2six.infiniteupgrades.config.sections.ReputationConfigSpec;
 import org.z2six.infiniteupgrades.config.sections.RitualsConfigSpec;
 import org.z2six.infiniteupgrades.config.sections.SoulsConfigSpec;
 import org.z2six.infiniteupgrades.config.sections.SoulsDropModel;
+import org.z2six.infiniteupgrades.config.sections.TuningConfigSpec;
 
 import java.util.*;
 
@@ -22,7 +23,7 @@ import static org.z2six.infiniteupgrades.config.parsing.ConfigParsing.parseLevel
 /**
  * SERVER-side authoritative config orchestrator for upgrades (+ souls).
  *
- * Now delegates each section to its own *ConfigSpec class. Public API and logic remain intact.
+ * Delegates each section to its own *ConfigSpec class. Public API and logic remain intact.
  */
 public final class UpgradeServerConfig {
     private static final Logger LOG = LogUtils.getLogger();
@@ -42,6 +43,7 @@ public final class UpgradeServerConfig {
     private static ReputationConfigSpec REPUTATION_SPEC;
     private static AttributesConfigSpec ATTR_SPEC;
     private static SoulsConfigSpec      SOULS_SPEC;
+    private static TuningConfigSpec     TUNING_SPEC;   // NEW: preview stepPercent + bonusSteps
 
     public static final ModConfigSpec SPEC;
 
@@ -49,6 +51,7 @@ public final class UpgradeServerConfig {
         // Attach all sections to the single builder (key paths preserved)
         GENERAL_SPEC    = GeneralConfigSpec.define(B);
         CHANCE_SPEC     = ChanceConfigSpec.define(B);
+        TUNING_SPEC     = TuningConfigSpec.define(B);      // NEW
         RITUALS_SPEC    = RitualsConfigSpec.define(B);
         REPUTATION_SPEC = ReputationConfigSpec.define(B);
         ATTR_SPEC       = AttributesConfigSpec.define(B);
@@ -63,9 +66,11 @@ public final class UpgradeServerConfig {
     public static final class Snapshot {
         public final UpgradeMode upgradeMode;
         public final int maxLevel;
+
         public final ChanceModelType chanceModel;
         public final double startChance;
         public final double decrementPerLevel;
+        public final double minChance;           // NEW
         public final double exponentialBase;
         public final Map<Integer, Double> chanceOverrides;
 
@@ -81,21 +86,27 @@ public final class UpgradeServerConfig {
 
         public final List<AttributeRuleConfig> attributes; // defaults + dynamic
 
-        public final SoulsConfig souls; // NEW
+        public final SoulsConfig souls;
 
-        private Snapshot(UpgradeMode mode, int maxLevel, ChanceModelType cm,
-                         double start, double dec, double expBase,
-                         Map<Integer, Double> overrides,
+        // NEW: server-authoritative preview tuning (client preview reads from this)
+        public final TuningConfigSpec.Snapshot tuning;
+
+        private Snapshot(UpgradeMode mode, int maxLevel,
+                         ChanceModelType cm, double start, double dec, double min,
+                         double expBase, Map<Integer, Double> overrides,
                          double angelMult, double demonMult,
                          int repMax, double repSucc, double repFail, double repCross,
                          double repBonusPerPoint, double repBonusClamp,
                          List<AttributeRuleConfig> attrs,
-                         SoulsConfig souls) {
+                         SoulsConfig souls,
+                         TuningConfigSpec.Snapshot tuning) {
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
+
             this.chanceModel = cm;
             this.startChance = start;
             this.decrementPerLevel = dec;
+            this.minChance = min;
             this.exponentialBase = expBase;
             this.chanceOverrides = overrides;
 
@@ -111,6 +122,12 @@ public final class UpgradeServerConfig {
 
             this.attributes = attrs;
             this.souls = souls;
+            this.tuning = tuning;
+        }
+
+        /** Client preview helper: percent (fraction) for L->L+1 according to server tuning. */
+        public double percentBonusForLevelUp(int currentLevel) {
+            return tuning != null ? tuning.percentBonusForLevelUp(currentLevel) : 0.05;
         }
     }
 
@@ -134,7 +151,7 @@ public final class UpgradeServerConfig {
         public final Set<ResourceLocation> whitelist;
         public final Set<ResourceLocation> blacklist;
 
-        // NEW: light controls (flow through to logic)
+        // Light controls
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
 
@@ -211,6 +228,9 @@ public final class UpgradeServerConfig {
             // Chance
             ChanceConfigSpec.Snapshot cs = CHANCE_SPEC.snapshot();
 
+            // Tuning (server preview)
+            TuningConfigSpec.Snapshot ts = TUNING_SPEC.snapshot();
+
             // Rituals
             RitualsConfigSpec.Snapshot rs = RITUALS_SPEC.snapshot();
 
@@ -234,8 +254,8 @@ public final class UpgradeServerConfig {
                     ss.allowPvP,
                     ss.whitelist,
                     ss.blacklist,
-                    ss.spawnLights,            // NEW
-                    ss.lightRadiusBlocks       // NEW
+                    ss.spawnLights,
+                    ss.lightRadiusBlocks
             );
 
             return new Snapshot(
@@ -244,6 +264,7 @@ public final class UpgradeServerConfig {
                     cs.model,
                     cs.startChance,
                     cs.decrementPerLevel,
+                    cs.minChance,          // NEW
                     cs.exponentialBase,
                     cs.overrides,
                     rs.angelStepMult,
@@ -255,7 +276,8 @@ public final class UpgradeServerConfig {
                     reps.repBonusPerPoint,
                     reps.repBonusClamp,
                     as.rules,
-                    souls
+                    souls,
+                    ts                        // NEW
             );
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
@@ -264,7 +286,8 @@ public final class UpgradeServerConfig {
                     UpgradeMode.RANDOM,
                     20,
                     ChanceModelType.FLAT_DECREMENT,
-                    1.0, 0.05, 0.95,
+                    1.0, 0.05, 0.0,     // start, decrement, minChance
+                    0.95,               // exponentialBase
                     parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
                     1.0, 1.5,
                     100, 0.1, 0.0, 1.0, 0.001, 0.20,
@@ -289,7 +312,8 @@ public final class UpgradeServerConfig {
                             Set.of(),                  // blacklist
                             true,                      // spawnLights (default)
                             3                          // lightRadiusBlocks (default)
-                    )
+                    ),
+                    new TuningConfigSpec.Snapshot(0.05, Map.of()) // stepPercent, bonusSteps
             );
         }
     }

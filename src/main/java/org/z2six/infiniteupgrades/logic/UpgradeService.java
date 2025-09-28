@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/logic/UpgradeService.java
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;
@@ -20,7 +21,6 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.Config;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig.ChanceModelType;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig.Snapshot;
@@ -57,6 +57,7 @@ public final class UpgradeService {
 
             if (s.chanceModel == ChanceModelType.FLAT_DECREMENT) {
                 double c = s.startChance - currentLevel * s.decrementPerLevel;
+                c = Math.max(s.minChance, c); // NEW: respect server-configured floor
                 return Math.max(0.0, Math.min(1.0, c));
             } else {
                 double c = s.startChance * Math.pow(s.exponentialBase, Math.max(0, currentLevel));
@@ -64,12 +65,8 @@ public final class UpgradeService {
             }
         } catch (Throwable t) {
             LOG.error("[UpgradeService] getSuccessChance failed: {}", t.toString());
-            // Defensive fallback to previous COMMON tuning if server config borked
-            try {
-                return Config.TUNING.chanceForNextLevel(currentLevel);
-            } catch (Throwable ignore) {
-                return 0.0;
-            }
+            // Defensive: if server config borked, return 0
+            return 0.0;
         }
     }
 

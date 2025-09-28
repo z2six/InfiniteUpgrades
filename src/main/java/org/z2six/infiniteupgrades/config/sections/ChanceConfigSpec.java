@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/chance/ChanceConfigSpec.java
+// File: src/main/java/org/z2six/infiniteupgrades/config/sections/ChanceConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -16,6 +16,7 @@ public final class ChanceConfigSpec {
     public final ModConfigSpec.EnumValue<ChanceModelType> model;
     public final ModConfigSpec.DoubleValue startChance;
     public final ModConfigSpec.DoubleValue decrementPerLevel;   // for FLAT
+    public final ModConfigSpec.DoubleValue minChance;           // NEW: clamp floor for FLAT
     public final ModConfigSpec.DoubleValue exponentialBase;     // for EXP
     public final ModConfigSpec.ConfigValue<List<? extends String>> overridesKV;
 
@@ -27,6 +28,8 @@ public final class ChanceConfigSpec {
                 .defineInRange("startChance", 1.0, 0.0, 1.0);
         decrementPerLevel = B.comment("Chance decrement per existing level (FLAT model).")
                 .defineInRange("decrementPerLevel", 0.05, 0.0, 1.0);
+        minChance = B.comment("Minimum clamped chance (FLAT model).")
+                .defineInRange("minChance", 0.0, 0.0, 1.0);
         exponentialBase = B.comment("Exponential base for per-level chance (EXP model). Example: 0.95")
                 .defineInRange("exponentialBase", 0.95, 0.0, 1.0);
         overridesKV = B.comment("Chance overrides per current level, format: \"level=chance\".")
@@ -42,13 +45,16 @@ public final class ChanceConfigSpec {
         public final ChanceModelType model;
         public final double startChance;
         public final double decrementPerLevel;
+        public final double minChance;
         public final double exponentialBase;
         public final Map<Integer, Double> overrides;
 
-        public Snapshot(ChanceModelType model, double startChance, double dec, double expBase, Map<Integer, Double> overrides) {
+        public Snapshot(ChanceModelType model, double startChance, double dec, double minChance,
+                        double expBase, Map<Integer, Double> overrides) {
             this.model = model;
             this.startChance = startChance;
             this.decrementPerLevel = dec;
+            this.minChance = minChance;
             this.exponentialBase = expBase;
             this.overrides = overrides;
         }
@@ -59,6 +65,7 @@ public final class ChanceConfigSpec {
                 model.get(),
                 clamp01(startChance.get()),
                 clamp01(decrementPerLevel.get()),
+                clamp01(minChance.get()),
                 clamp01(exponentialBase.get()),
                 parseLevelDoubleMap(overridesKV.get(), "chance.overrides")
         );

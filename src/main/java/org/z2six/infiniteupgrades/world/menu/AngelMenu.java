@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelMenu.java
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -23,7 +24,6 @@ import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.Config;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.Reputation;
@@ -43,6 +43,11 @@ import java.util.regex.Pattern;
  * Reputation:
  *  - Applied as extra success chance bonus (server-authoritative).
  *  - Updated (+/-) on SUCCESS/FAIL attempts, with cross-coupling.
+ *
+ * Preview notes:
+ *  - Server remains authoritative on click (chance, caps, rules, etc.).
+ *  - Client-side preview now reads the server's "tuning" (stepPercent + bonusSteps)
+ *    via UpgradeServerConfig.snapshot() for the per-level preview factor.
  */
 public class AngelMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
@@ -373,7 +378,8 @@ public class AngelMenu extends AbstractContainerMenu {
             int nextLevel = currentLevel + 1;
 
             // Respect max level from SERVER config
-            int maxLevel = UpgradeServerConfig.snapshot().maxLevel;
+            UpgradeServerConfig.Snapshot snap = UpgradeServerConfig.snapshot();
+            int maxLevel = snap.maxLevel;
             if (nextLevel > maxLevel) {
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
@@ -386,9 +392,8 @@ public class AngelMenu extends AbstractContainerMenu {
             double chance = UpgradeService.getSuccessChance(currentLevel);
             previewChancePermille = (int)Math.round(chance * 1000.0);
 
-            // Scale factor for THIS increment (not total). We keep using COMMON tuning here
-            // (server is authoritative on click).
-            double step = Config.TUNING.percentBonusForLevelUp(currentLevel);
+            // Scale factor for THIS increment (server-authoritative preview tuning)
+            double step = snap.percentBonusForLevelUp(currentLevel);
             double factor = 1.0 + step;
 
             // Build GHOST preview by scaling all combat modifiers (as before)
