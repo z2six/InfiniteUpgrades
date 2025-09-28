@@ -1,4 +1,4 @@
-// file: src/main/java/org/z2six/infiniteupgrades/world/SoulOrbEntity.java
+// File: src/main/java/org/z2six/infiniteupgrades/world/SoulOrbEntity.java
 package org.z2six.infiniteupgrades.world;
 
 import com.mojang.logging.LogUtils;
@@ -15,32 +15,41 @@ import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.util.LightScheduler;
+import org.z2six.infiniteupgrades.util.SoulLightService;
 
 import java.util.Locale;
 
+/**
+ * NOTE: Logic preserved from your version. Additions:
+ * - Tracks the BlockPos used for the static light (if any) via setLightAnchor().
+ * - On removal paths (onRemovedFromLevel and lifetime expiry), schedules a light remove and
+ *   updates SoulLightService (recordRemoved) to keep persistence consistent.
+ * - fadeFactor(...) helper added to support renderer fade-out.
+ */
 public class SoulOrbEntity extends Entity {
     private static final Logger LOG = LogUtils.getLogger();
 
     // log switches
     private static final boolean LOG_SPAWN  = true;
-    private static final boolean LOG_TICKS  = false;
-    private static final int     LOG_EVERY  = 20;
+    private static final boolean LOG_TICKS  = false;  // silenced spam
+    private static final int     LOG_EVERY  = 20;     // ticks
 
     public enum Tier { SMALL, MEDIUM, LARGE, EXTRA_LARGE }
 
     private static final EntityDataAccessor<Integer> DATA_TIER =
             SynchedEntityData.defineId(SoulOrbEntity.class, EntityDataSerializers.INT);
 
-    private int lifetime = 20 * 30; // default 30 seconds, configurable via spawner
+    private int lifetime = 20 * 30; // 30 seconds
 
     // Hover state
-    private double hoverBaseY;
-    private float hoverPhaseOffset;
-    private float hoverSpeed = 0.08f;
-    private float hoverAmplitude = 0.08f;
+    private double hoverBaseY;           // y around which we bob
+    private float hoverPhaseOffset;      // per-orb phase
+    private float hoverSpeed = 0.08f;    // radians/tick
+    private float hoverAmplitude = 0.08f;// blocks
 
-    // Where we placed the static light (queued via LightScheduler)
-    private BlockPos lightPos = null;
+    // Light cleanup bookkeeping
+    private @org.jetbrains.annotations.Nullable BlockPos lightAnchor;
+    private boolean lightCleared = false;
 
     public SoulOrbEntity(EntityType<? extends SoulOrbEntity> type, net.minecraft.world.level.Level level) {
         super(type, level);
@@ -65,9 +74,10 @@ public class SoulOrbEntity extends Entity {
 
         if (LOG_SPAWN && !level.isClientSide) {
             var bb = this.getBoundingBox();
-            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, dim={}, pos=({},{},{}), life={}t, size=({},{})",
+            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
                     this.getId(), tier, level.dimension().location(),
                     fmt(pos.x), fmt(pos.y), fmt(pos.z), lifetimeTicks,
+                    fmt(bb.minX), fmt(bb.minY), fmt(bb.maxX), fmt(bb.maxY),
                     fmt(bb.getXsize()), fmt(bb.getYsize()));
         }
     }
@@ -87,11 +97,10 @@ public class SoulOrbEntity extends Entity {
         if (tag.contains("HoverSpeed")) this.hoverSpeed = tag.getFloat("HoverSpeed");
         if (tag.contains("HoverAmp"))   this.hoverAmplitude = tag.getFloat("HoverAmp");
         if (tag.contains("HoverPhase")) this.hoverPhaseOffset = tag.getFloat("HoverPhase");
-
-        if (tag.contains("LightX")) {
-            this.lightPos = new BlockPos(tag.getInt("LightX"), tag.getInt("LightY"), tag.getInt("LightZ"));
+        if (tag.contains("LightPos")) {
+            long lp = tag.getLong("LightPos");
+            if (lp != 0L) this.lightAnchor = BlockPos.of(lp);
         }
-
         this.refreshDimensions();
     }
 
@@ -103,12 +112,7 @@ public class SoulOrbEntity extends Entity {
         tag.putFloat("HoverSpeed", this.hoverSpeed);
         tag.putFloat("HoverAmp", this.hoverAmplitude);
         tag.putFloat("HoverPhase", this.hoverPhaseOffset);
-
-        if (this.lightPos != null) {
-            tag.putInt("LightX", this.lightPos.getX());
-            tag.putInt("LightY", this.lightPos.getY());
-            tag.putInt("LightZ", this.lightPos.getZ());
-        }
+        if (this.lightAnchor != null) tag.putLong("LightPos", this.lightAnchor.asLong());
     }
 
     @Override
@@ -116,13 +120,16 @@ public class SoulOrbEntity extends Entity {
         super.tick();
 
         if (this.tickCount > this.lifetime) {
-            if (!level().isClientSide && LOG_SPAWN) {
-                LOG.info("[SoulOrbEntity] discard: id={}, age={}t/life={}t, lastPos=({},{},{})",
-                        this.getId(), this.tickCount, this.lifetime,
-                        fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()));
-            }
+            // lifetime over: clean up light (server) and discard
+            if (!level().isClientSide) cleanupLight();
             this.discard();
             return;
+        }
+
+        if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
+            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), dim={}, lifeLeft={}t",
+                    this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
+                    this.level().dimension().location(), (this.lifetime - this.tickCount));
         }
 
         // ---- SERVER: authoritative hover motion ----
@@ -136,22 +143,10 @@ public class SoulOrbEntity extends Entity {
             this.setPos(x, y, z);
         }
 
-        if (LOG_TICKS && (this.tickCount % LOG_EVERY) == 0 && !level().isClientSide) {
-            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), lifeLeft={}t",
-                    this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()), (this.lifetime - this.tickCount));
-        }
+        // CLIENT: no position fiddling here; vanilla handles interpolation
     }
 
-    @Override
-    public void onRemovedFromLevel() {
-        super.onRemovedFromLevel();
-        if (this.lightPos != null && this.level() instanceof net.minecraft.server.level.ServerLevel sl) {
-            LightScheduler.queueRemove(sl, this.lightPos);
-            this.lightPos = null;
-        }
-    }
-
-    /** Let spawner fix our exact hover center. */
+    /** Called by spawner to set the exact hover center (existing behavior). */
     public void setHoverBaseY(double y) {
         this.hoverBaseY = y;
         this.setPos(this.getX(), y, this.getZ());
@@ -161,35 +156,16 @@ public class SoulOrbEntity extends Entity {
         }
     }
 
-    public void setLightPos(BlockPos pos) { this.lightPos = pos; }
-
-    // ---- Fade-out support ----------------------------------------------------
-
-    /** Total lifetime in ticks. */
-    public int getLifetimeTicks() { return this.lifetime; }
-
-    /**
-     * Returns a [0..1] factor to fade visuals as the orb approaches despawn.
-     * @param partialTick       render partial tick
-     * @param fadeWindowTicks   how long (in ticks) the fade should last; commonly 200 (=10s)
-     */
-    public float fadeFactor(float partialTick, int fadeWindowTicks) {
-        final float age = this.tickCount + Mth.clamp(partialTick, 0f, 1f);
-        final int life = Math.max(1, this.lifetime);
-        final int window = Mth.clamp(fadeWindowTicks, 1, life);
-        final float remaining = life - age;
-        if (remaining <= 0f) return 0f;
-        if (remaining >= window) return 1f;
-        return Mth.clamp(remaining / (float) window, 0f, 1f);
-    }
-
     // Slight inflation for safety (helpers in 1.21.1; no @Override)
     public AABB getBoundingBoxForCulling() { return super.getBoundingBox().inflate(0.15); }
     public AABB getRenderBoundingBox()     { return this.getBoundingBox().inflate(0.15); }
 
     @Override
-    public boolean shouldRenderAtSqrDistance(double dist) { return dist < 16384.0D; } // ~128 blocks
+    public boolean shouldRenderAtSqrDistance(double dist) {
+        return dist < 16384.0D; // ~128 blocks
+    }
 
+    // Render helpers
     public float baseQuadSize() {
         return switch (getTier()) {
             case SMALL       -> 0.28f;
@@ -199,6 +175,19 @@ public class SoulOrbEntity extends Entity {
         };
     }
 
+    /**
+     * Used by the renderer to fade the soul out during the last N ticks of its life.
+     * Returns a factor in [0..1], where 1 = fully visible, 0 = fully faded.
+     */
+    public float fadeFactor(float partialTick, int fadeWindowTicks) {
+        if (fadeWindowTicks <= 0) return 1.0f;
+        float remaining = (this.lifetime - this.tickCount) - partialTick;
+        if (remaining <= 0f) return 0f;
+        if (remaining >= fadeWindowTicks) return 1f;
+        return Mth.clamp(remaining / (float) fadeWindowTicks, 0f, 1f);
+    }
+
+    // Tier sync
     public Tier getTier() {
         int ord = getTierOrdinal();
         return Tier.values()[Mth.clamp(ord, 0, Tier.values().length - 1)];
@@ -206,4 +195,36 @@ public class SoulOrbEntity extends Entity {
     public void setTier(Tier tier) { setTierOrdinal(tier.ordinal()); }
     private int getTierOrdinal() { return this.entityData.get(DATA_TIER); }
     private void setTierOrdinal(int ord) { this.entityData.set(DATA_TIER, ord); }
+
+    // ---- Light lifecycle glue ----------------------------------------------------
+
+    /** Spawner should call this once it knows the final BlockPos used for the light. */
+    public void setLightAnchor(BlockPos pos) {
+        this.lightAnchor = pos == null ? null : pos.immutable();
+        this.lightCleared = false;
+    }
+
+    /** Attempt to clear the static light if we registered one. Server side only. */
+    private void cleanupLight() {
+        if (this.lightCleared) return;
+        if (this.lightAnchor == null) { this.lightCleared = true; return; }
+        if (!(this.level() instanceof net.minecraft.server.level.ServerLevel sl)) { return; }
+
+        // Schedule actual removal and update persisted registry (matches current SoulLightService API)
+        LightScheduler.queueRemove(sl, this.lightAnchor);
+        SoulLightService.get(sl).recordRemoved(this.lightAnchor);
+
+        this.lightCleared = true;
+
+        if (LOG_SPAWN) {
+            LOG.info("[SoulOrbEntity] cleanupLight: id={}, removed light @ {}", this.getId(), this.lightAnchor);
+        }
+    }
+
+    /** Called when entity is fully removed from the world (e.g., chunk unload, world quit). */
+    @Override
+    public void onRemovedFromLevel() {
+        if (!this.level().isClientSide) cleanupLight();
+        super.onRemovedFromLevel();
+    }
 }

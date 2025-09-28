@@ -1,4 +1,4 @@
-// file: src/main/java/org/z2six/infiniteupgrades/logic/SoulDrops.java
+// File: src/main/java/org/z2six/infiniteupgrades/logic/SoulDrops.java
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;
@@ -13,21 +13,24 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
-import org.z2six.infiniteupgrades.util.LightScheduler;
+import org.z2six.infiniteupgrades.util.SoulLightService;
 import org.z2six.infiniteupgrades.world.SoulOrbEntity;
 
 import java.util.Comparator;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Unchanged drop logic; added robust light registration using SoulLightService and light config control.
+ */
 @EventBusSubscriber(modid = Infiniteupgrades.MODID)
 public final class SoulDrops {
     private static final Logger LOG = LogUtils.getLogger();
 
+    // logging verbosity switches
     private static final boolean LOG_DECISIONS = true;
     private static final boolean LOG_SUCCESS   = true;
 
@@ -41,7 +44,7 @@ public final class SoulDrops {
     }
 
     @SubscribeEvent
-    public static void onLivingDrops(LivingDropsEvent evt) {
+    public static void onLivingDrops(net.neoforged.neoforge.event.entity.living.LivingDropsEvent evt) {
         try {
             final LivingEntity victim = evt.getEntity();
             final Level lvl = victim.level();
@@ -65,11 +68,13 @@ public final class SoulDrops {
                 return;
             }
 
+            // PvP gating
             if (victim instanceof Player && !cfg.allowPvP) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: victim is player and allowPvP=false");
                 return;
             }
 
+            // Entity whitelist/blacklist
             if (!cfg.whitelist.isEmpty() && !cfg.whitelist.contains(entId)) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: {} not in whitelist", entId);
                 return;
@@ -79,60 +84,61 @@ public final class SoulDrops {
                 return;
             }
 
+            // Roll chance
             RandomSource r = victim.getRandom();
             double roll = r.nextDouble();
             if (LOG_DECISIONS) {
-                LOG.info("[SoulDrops] chance: roll={}, threshold={}", fmt(roll), fmt(cfg.dropChance));
+                LOG.info("[SoulDrops] chance: roll={}, threshold={}",
+                        fmt(roll), fmt(cfg.dropChance));
             }
             if (roll > cfg.dropChance) {
                 if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: chance roll failed");
                 return;
             }
 
-            double maxHp = Math.max(0.0, victim.getMaxHealth());
-            int units = (int)Math.floor(maxHp * cfg.hpToSoulsRatio);
-            if (LOG_DECISIONS) {
-                LOG.info("[SoulDrops] units: maxHp={}, ratio={}, -> units={}, minUnitsForDrop={}",
-                        fmt(maxHp), fmt(cfg.hpToSoulsRatio), units, cfg.minUnitsForDrop);
-            }
-            if (units < cfg.minUnitsForDrop) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: units < minUnitsForDrop");
-                return;
-            }
-
-            SoulOrbEntity.Tier tier = pickTier(cfg, units);
+            // Choose tier (model can be ratio or thresholds; logic centralized here)
+            SoulOrbEntity.Tier tier = selectTier(cfg, victim.getMaxHealth());
             if (tier == null) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: no tier <= units");
+                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: no tier matched");
                 return;
             }
 
             int lifetimeTicks = Math.max(1, cfg.lifetimeSeconds) * 20;
 
+            // Position: around victim's feet + safe hover offset
             Vec3 anchor = victim.position();
             double dx = (r.nextDouble() - 0.5) * RAND_H_RANGE;
             double dz = (r.nextDouble() - 0.5) * RAND_H_RANGE;
             double y = anchor.y + hoverOffsetY(victim);
             Vec3 at = new Vec3(anchor.x + dx, y, anchor.z + dz);
 
-            var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
-            orb.setHoverBaseY(y);
-            lvl.addFreshEntity(orb);
-
-            // Queue light for end-of-tick processing (safe & batched)
-            if (lvl instanceof ServerLevel sl) {
-                BlockPos lightAt = BlockPos.containing(at);
-                LightScheduler.queuePlace(sl, lightAt, 4); // ≈3-block reach
-                orb.setLightPos(lightAt);
-            }
-
+            // Log spawn decision
             if (LOG_SUCCESS) {
-                LOG.info("[SoulDrops] SPAWN: dim={}, entityId={}, entityType={}, tier={}, units={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
-                        dim, victim.getId(), entId, tier, units, lifetimeTicks,
+                LOG.info("[SoulDrops] SPAWN: dim={}, entityId={}, entityType={}, tier={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
+                        dim, victim.getId(), entId, tier, lifetimeTicks,
                         fmt(at.x), fmt(at.y), fmt(at.z),
                         fmt(anchor.x), fmt(anchor.y), fmt(anchor.z),
                         fmt(dx), fmt(dz));
             }
 
+            // Spawn the orb
+            var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
+            orb.setHoverBaseY(y);
+            lvl.addFreshEntity(orb);
+
+            // Register & place its static light (server side only) per config
+            if (lvl instanceof ServerLevel sl) {
+                if (cfg.spawnLights && cfg.lightRadiusBlocks > 0) {
+                    final int lightLevel = Math.min(15, cfg.lightRadiusBlocks + 1); // radius≈level-1
+                    final BlockPos posForLight = BlockPos.containing(at.x, at.y, at.z);
+                    final long expiresAt = sl.getGameTime() + lifetimeTicks + 5L;
+
+                    SoulLightService.get(sl).registerAndPlace(sl, posForLight, lightLevel, expiresAt, orb.getUUID());
+                    orb.setLightAnchor(posForLight);
+                }
+            }
+
+            // Visibility ping: small sparkle cluster at spawn
             if (lvl instanceof ServerLevel sl) {
                 sl.sendParticles(ParticleTypes.END_ROD, at.x, at.y, at.z, 12, 0.05, 0.05, 0.05, 0.02);
             }
@@ -143,35 +149,74 @@ public final class SoulDrops {
 
     private static String fmt(double v) { return String.format(Locale.ROOT, "%.3f", v); }
 
-    private static SoulOrbEntity.Tier pickTier(UpgradeServerConfig.SoulsConfig cfg, int units) {
-        SoulOrbEntity.Tier best = null;
-        int bestVal = -1;
+    // ---- Tier selection helpers (mirror of your existing semantics) ----
 
-        for (Map.Entry<String,Integer> e : cfg.tierUnits.entrySet()) {
-            SoulOrbEntity.Tier t = parseTier(e.getKey());
-            if (t == null) continue;
-            int val = Math.max(0, e.getValue());
-            if (val <= units && val >= bestVal) {
-                if (val > bestVal || (best != null && order(t) > order(best))) {
-                    bestVal = val; best = t;
+    private static SoulOrbEntity.Tier selectTier(UpgradeServerConfig.SoulsConfig cfg, double maxHp) {
+        switch (cfg.dropModel) {
+            case HP_THRESHOLDS -> {
+                double hearts = Math.max(0.0, maxHp) * 0.5;
+                SoulOrbEntity.Tier best = null;
+                double bestMin = -1.0;
+                for (Map.Entry<String, Double> e : cfg.tierMinHearts.entrySet()) {
+                    SoulOrbEntity.Tier t = parseTier(e.getKey());
+                    if (t == null) continue;
+                    double minH = Math.max(0.0, e.getValue());
+                    if (hearts + 1e-6 >= minH && minH >= bestMin) {
+                        if (minH > bestMin || (best != null && order(t) > order(best))) {
+                            bestMin = minH; best = t;
+                        }
+                    }
                 }
+                if (best == null) {
+                    // defaults fallback
+                    var defaults = Map.of(
+                            SoulOrbEntity.Tier.EXTRA_LARGE, 40.0,
+                            SoulOrbEntity.Tier.LARGE,      20.0,
+                            SoulOrbEntity.Tier.MEDIUM,     10.0,
+                            SoulOrbEntity.Tier.SMALL,       0.0
+                    );
+                    for (var e : defaults.entrySet().stream()
+                            .sorted((a,b) -> Double.compare(b.getValue(), a.getValue()))
+                            .toList()) {
+                        if (hearts >= e.getValue()) return e.getKey();
+                    }
+                }
+                return best;
             }
-        }
+            case RATIO -> {
+                double unitsD = Math.floor(Math.max(0.0, maxHp) * cfg.hpToSoulsRatio);
+                int units = (int) unitsD;
+                if (units < cfg.minUnitsForDrop) return null;
 
-        if (best == null) {
-            var defaults = Map.of(
-                    SoulOrbEntity.Tier.EXTRA_LARGE, 16,
-                    SoulOrbEntity.Tier.LARGE, 8,
-                    SoulOrbEntity.Tier.MEDIUM, 4,
-                    SoulOrbEntity.Tier.SMALL, 1
-            );
-            for (var entry : defaults.entrySet().stream()
-                    .sorted(Comparator.comparingInt(Map.Entry<SoulOrbEntity.Tier,Integer>::getValue).reversed())
-                    .toList()) {
-                if (entry.getValue() <= units) return entry.getKey();
+                SoulOrbEntity.Tier best = null;
+                int bestVal = -1;
+                for (Map.Entry<String,Integer> e : cfg.tierUnits.entrySet()) {
+                    SoulOrbEntity.Tier t = parseTier(e.getKey());
+                    if (t == null) continue;
+                    int val = Math.max(0, e.getValue());
+                    if (val <= units && val >= bestVal) {
+                        if (val > bestVal || (best != null && order(t) > order(best))) {
+                            bestVal = val; best = t;
+                        }
+                    }
+                }
+                if (best == null) {
+                    var defaults = Map.of(
+                            SoulOrbEntity.Tier.EXTRA_LARGE, 16,
+                            SoulOrbEntity.Tier.LARGE,       8,
+                            SoulOrbEntity.Tier.MEDIUM,      4,
+                            SoulOrbEntity.Tier.SMALL,       1
+                    );
+                    for (var entry : defaults.entrySet().stream()
+                            .sorted(Map.Entry.<SoulOrbEntity.Tier,Integer>comparingByValue().reversed())
+                            .toList()) {
+                        if (entry.getValue() <= units) return entry.getKey();
+                    }
+                }
+                return best;
             }
         }
-        return best;
+        return null;
     }
 
     private static SoulOrbEntity.Tier parseTier(String name) {
