@@ -1,4 +1,4 @@
-// Main Java entrypoint: src/main/java/org/z2six/infiniteupgrades/InfiniteUpgrades.java
+// File: src/main/java/org/z2six/infiniteupgrades/InfiniteUpgrades.java
 package org.z2six.infiniteupgrades;
 
 // NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.
@@ -6,12 +6,9 @@ package org.z2six.infiniteupgrades;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.network.chat.Component;
-import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
@@ -30,13 +27,12 @@ import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
-import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.AngelRenderer;
 import org.z2six.infiniteupgrades.client.DemonRenderer;
-import org.z2six.infiniteupgrades.client.screen.AngelScreen;
+import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.registry.ModEntityTypes;
@@ -151,10 +147,11 @@ public class Infiniteupgrades {
         @SubscribeEvent
         public static void registerScreens(RegisterMenuScreensEvent evt) {
             try {
-                evt.register(ModMenus.ANGEL_MENU.get(), org.z2six.infiniteupgrades.client.screen.AngelScreen::new);
-                LOGGER.debug("[InfiniteUpgrades] Registered AngelScreen");
+                // Register our unified Angel/Demon screen
+                evt.register(ModMenus.ANGEL_MENU.get(), org.z2six.infiniteupgrades.client.screen.AngelDemonScreen::new);
+                LOGGER.debug("[InfiniteUpgrades] Registered AngelDemonScreen");
             } catch (Throwable t) {
-                LOGGER.error("[InfiniteUpgrades] Failed to register AngelScreen", t);
+                LOGGER.error("[InfiniteUpgrades] Failed to register AngelDemonScreen", t);
             }
         }
 

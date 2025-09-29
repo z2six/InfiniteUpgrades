@@ -18,7 +18,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
-import org.z2six.infiniteupgrades.world.menu.AngelMenu;
+import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
 /**
  * // MainFile: SigilBlockEntity.java
@@ -76,11 +76,11 @@ public class SigilBlockEntity extends BlockEntity implements net.minecraft.world
     @Override
     public AbstractContainerMenu createMenu(int id, Inventory playerInv, Player player) {
         try {
-            // AngelMenu's registered factory signature is (id, inv, FriendlyByteBuf).
+            // AngelDemonMenu's registered factory signature is (id, inv, FriendlyByteBuf).
             // On the SERVER, we create a tiny buffer that carries our BlockPos for the client.
             FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
             buf.writeBlockPos(this.getBlockPos());
-            return new AngelMenu(id, playerInv, buf);
+            return new AngelDemonMenu(id, playerInv, buf);
         } catch (Throwable t) {
             LOG.error("[SigilBE] createMenu failed: {}", t.toString());
             return null; // Returning null cancels opening gracefully.

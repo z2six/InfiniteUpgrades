@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelMenu.java
+// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelDemonMenu.java
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -36,38 +36,36 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Angel/Demon menu (still named AngelMenu for wiring). Context-aware:
- *  - RitualType.ANGEL -> upgrade *all* eligible attributes each success
- *  - RitualType.DEMON -> upgrade *one random* eligible attribute each success
+ * Angel/Demon menu (context-aware). Slot positions are measured relative to the top-left
+ * of the main panel texture (176x222). We center a COMPOSITE canvas of (main + 1px gap + details).
  *
- * Reputation:
- *  - Applied as extra success chance bonus (server-authoritative).
- *  - Updated (+/-) on SUCCESS/FAIL attempts, with cross-coupling.
+ * Slot anchors per spec (MAIN-space, i.e., relative to main.png origin).
+ * NOTE: All slots are shifted 1px left and 1px up for perfect alignment.
  *
- * Preview notes:
- *  - Server remains authoritative on click (chance, caps, rules, etc.).
- *  - Client-side preview now reads the server's "tuning" (stepPercent + bonusSteps)
- *    via UpgradeServerConfig.snapshot() for the per-level preview factor.
+ *  - Inputs:  (62,36), (98,36)
+ *  - Output:  (80,72)
+ *  - Inv 3x9: top-left at (8,140), step 18px (16 slot + 2 gap)
+ *  - Hotbar:  top-left at (8,198), step 18px
  */
-public class AngelMenu extends AbstractContainerMenu {
+public class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // ---------------- Slot coordinates (GUI-relative) ----------------
-    public static final int INPUT1_X = 27;
-    public static final int INPUT1_Y = 47;
+    // ---------------- Slot coordinates (MAIN-space, shifted -1,-1) ----------------
+    public static final int INPUT1_X = 62;
+    public static final int INPUT1_Y = 36;
 
-    public static final int INPUT2_X = 76;
-    public static final int INPUT2_Y = 47;
+    public static final int INPUT2_X = 98;
+    public static final int INPUT2_Y = 36;
 
-    public static final int OUTPUT_X = 134;
-    public static final int OUTPUT_Y = 47;
+    public static final int OUTPUT_X = 80;
+    public static final int OUTPUT_Y = 72;
 
-    // Player inv anchors (vanilla layout)
-    private static final int PLAYER_INV_X = 8;
-    private static final int PLAYER_INV_Y = 84;
-    private static final int HOTBAR_Y     = 142;
+    // Player inv anchors (MAIN-space)
+    private static final int PLAYER_INV_X = 8;    // top-left of 3x9 grid
+    private static final int PLAYER_INV_Y = 140;
+    private static final int HOTBAR_Y     = 198;  // top-left of 1x9 bar
 
-    // Button ids
+    // Button id
     public static final int BUTTON_INFUSE = 0;
 
     // Consider these as "combat attributes" for filtering & scaling (preview)
@@ -91,9 +89,9 @@ public class AngelMenu extends AbstractContainerMenu {
             super.setChanged();
             if (suppressPreviewUpdate) return;
             try {
-                AngelMenu.this.slotsChanged(this);
+                AngelDemonMenu.this.slotsChanged(this);
             } catch (Throwable t) {
-                LOG.error("[AngelMenu] slotsChanged dispatch failed: {}", t.toString());
+                LOG.error("[AngelDemonMenu] slotsChanged dispatch failed: {}", t.toString());
             }
         }
     };
@@ -105,7 +103,7 @@ public class AngelMenu extends AbstractContainerMenu {
     private RitualType ritual = RitualType.ANGEL; // default
     private BlockPos anchorPos = BlockPos.ZERO;
 
-    public AngelMenu(int id, Inventory inv) {
+    public AngelDemonMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
         try {
             // Inputs
@@ -121,12 +119,12 @@ public class AngelMenu extends AbstractContainerMenu {
                 @Override public boolean mayPlace(ItemStack stack) { return false; }
                 @Override public boolean mayPickup(Player player) {
                     boolean real = hasRealResult();
-                    LOG.debug("[AngelMenu] mayPickup slot2? realResult={}", real);
+                    LOG.debug("[AngelDemonMenu] mayPickup slot2? realResult={}", real);
                     return real;
                 }
                 @Override public void onTake(Player player, ItemStack stack) {
                     super.onTake(player, stack);
-                    LOG.info("[AngelMenu] Player took infused result from output slot");
+                    LOG.info("[AngelDemonMenu] Player took infused result from output slot");
                     withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
                     // After taking, recompute ghost preview if inputs still valid
                     syncToClient("onTake result");
@@ -137,22 +135,26 @@ public class AngelMenu extends AbstractContainerMenu {
             // Player inventory (3 rows)
             for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 9; ++col) {
-                    this.addSlot(new Slot(inv, col + row * 9 + 9, PLAYER_INV_X + col * 18, PLAYER_INV_Y + row * 18));
+                    this.addSlot(new Slot(inv, col + row * 9 + 9,
+                            PLAYER_INV_X + col * 18,
+                            PLAYER_INV_Y + row * 18));
                 }
             }
             // Hotbar
             for (int col = 0; col < 9; ++col) {
-                this.addSlot(new Slot(inv, col, PLAYER_INV_X + col * 18, HOTBAR_Y));
+                this.addSlot(new Slot(inv, col,
+                        PLAYER_INV_X + col * 18,
+                        HOTBAR_Y));
             }
 
             // Initial preview
             updatePreview();
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] ctor failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] ctor failed: {}", t.toString());
         }
     }
 
-    public AngelMenu(int id, Inventory inv, FriendlyByteBuf buf) {
+    public AngelDemonMenu(int id, Inventory inv, FriendlyByteBuf buf) {
         this(id, inv);
         try {
             // Buf from SigilBlockEntity contains BlockPos
@@ -172,9 +174,9 @@ public class AngelMenu extends AbstractContainerMenu {
                     }
                 }
             }
-            LOG.debug("[AngelMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
+            LOG.debug("[AngelDemonMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] Failed reading ritual context from buf: {}", t.toString());
+            LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
         }
     }
 
@@ -188,7 +190,7 @@ public class AngelMenu extends AbstractContainerMenu {
     @Override
     public void slotsChanged(Container container) {
         super.slotsChanged(container);
-        LOG.debug("[AngelMenu] slotsChanged: in={}, res={}, out={}, realOut={} (ritual={})",
+        LOG.debug("[AngelDemonMenu] slotsChanged: in={}, res={}, out={}, realOut={} (ritual={})",
                 baseInv.getItem(0), baseInv.getItem(1), baseInv.getItem(2), hasRealResult(), ritual);
         updatePreview();
     }
@@ -205,7 +207,7 @@ public class AngelMenu extends AbstractContainerMenu {
 
     @Override
     public boolean clickMenuButton(Player player, int id) {
-        LOG.info("[AngelMenu] clickMenuButton id={} (serverSide={})", id, player != null && !player.level().isClientSide);
+        LOG.info("[AngelDemonMenu] clickMenuButton id={} (serverSide={})", id, player != null && !player.level().isClientSide);
         if (id == BUTTON_INFUSE) {
             onInfuseButtonPressed(player);
             return true;
@@ -217,7 +219,7 @@ public class AngelMenu extends AbstractContainerMenu {
     public void onInfuseButtonPressed(Player player) {
         try {
             if (player == null || player.level().isClientSide) {
-                LOG.warn("[AngelMenu] onInfuseButtonPressed ignored (player null or client-side)");
+                LOG.warn("[AngelDemonMenu] onInfuseButtonPressed ignored (player null or client-side)");
                 return;
             }
 
@@ -226,11 +228,11 @@ public class AngelMenu extends AbstractContainerMenu {
 
             // Validate inputs
             if (in.isEmpty() || !isCombatItem(in)) {
-                LOG.debug("[AngelMenu] Infuse pressed with invalid/missing combat item");
+                LOG.debug("[AngelDemonMenu] Infuse pressed with invalid/missing combat item");
                 return;
             }
             if (res.isEmpty() || !res.is(Items.IRON_INGOT)) {
-                LOG.debug("[AngelMenu] Infuse pressed without required resource");
+                LOG.debug("[AngelDemonMenu] Infuse pressed without required resource");
                 return;
             }
 
@@ -252,7 +254,7 @@ public class AngelMenu extends AbstractContainerMenu {
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 Reputation.applyAttemptDelta(sp, ritual, success);
             } else {
-                LOG.warn("[AngelMenu] applyAttemptDelta skipped: not a ServerPlayer");
+                LOG.warn("[AngelDemonMenu] applyAttemptDelta skipped: not a ServerPlayer");
             }
 
             if (success) {
@@ -260,19 +262,19 @@ public class AngelMenu extends AbstractContainerMenu {
                 ItemStack upgraded = r.upgraded();
                 clearPreviewTags(upgraded); // ensure not marked as preview
 
-                LOG.info("[AngelMenu] Infuse SUCCESS at L{} (ritual={}, baseChance={}, bonus={}, final={}) -> put result", cur, ritual, baseChance, bonus, finalChance);
+                LOG.info("[AngelDemonMenu] Infuse SUCCESS at L{} (ritual={}, baseChance={}, bonus={}, final={}) -> put result", cur, ritual, baseChance, bonus, finalChance);
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(0, ItemStack.EMPTY); // consume the input item on success
                     baseInv.setItem(2, upgraded);        // put real result into output
                 });
                 syncToClient("infuse success");
             } else {
-                LOG.info("[AngelMenu] Infuse FAILED at L{} (ritual={}, baseChance={}, bonus={}, final={})", cur, ritual, baseChance, bonus, finalChance);
+                LOG.info("[AngelDemonMenu] Infuse FAILED at L{} (ritual={}, baseChance={}, bonus={}, final={})", cur, ritual, baseChance, bonus, finalChance);
                 syncToClient("infuse fail");
                 updatePreview();
             }
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] onInfuseButtonPressed failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] onInfuseButtonPressed failed: {}", t.toString());
         }
     }
 
@@ -319,7 +321,7 @@ public class AngelMenu extends AbstractContainerMenu {
             slot.onTake(player, stack);
             return copy;
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] quickMoveStack failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] quickMoveStack failed: {}", t.toString());
             return ItemStack.EMPTY;
         }
     }
@@ -331,7 +333,7 @@ public class AngelMenu extends AbstractContainerMenu {
         try {
             super.removed(player);
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] super.removed threw: {}", t.toString());
+            LOG.error("[AngelDemonMenu] super.removed threw: {}", t.toString());
         }
 
         try {
@@ -343,9 +345,9 @@ public class AngelMenu extends AbstractContainerMenu {
 
             // Return everything else (including a REAL result if present)
             this.clearContainer(player, baseInv);
-            LOG.debug("[AngelMenu] Menu closed; returned items (ritual={})", ritual);
+            LOG.debug("[AngelDemonMenu] Menu closed; returned items (ritual={})", ritual);
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] removed() failed to clear/return items: {}", t.toString());
+            LOG.error("[AngelDemonMenu] removed() failed to clear/return items: {}", t.toString());
         }
     }
 
@@ -356,7 +358,7 @@ public class AngelMenu extends AbstractContainerMenu {
         try {
             // If we’re currently showing a REAL result, do not clobber it with a ghost
             if (hasRealResult()) {
-                LOG.debug("[AngelMenu] updatePreview skipped (real result present)");
+                LOG.debug("[AngelDemonMenu] updatePreview skipped (real result present)");
                 return;
             }
 
@@ -451,7 +453,7 @@ public class AngelMenu extends AbstractContainerMenu {
             // Put the ghost into the output slot
             withPreviewSuppressed(() -> baseInv.setItem(2, preview));
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] updatePreview failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] updatePreview failed: {}", t.toString());
             withPreviewSuppressed(() -> {
                 baseInv.setItem(2, ItemStack.EMPTY);
                 previewChancePermille = 0;
@@ -468,13 +470,13 @@ public class AngelMenu extends AbstractContainerMenu {
 
     private void syncToClient(String reason) {
         try {
-            LOG.debug("[AngelMenu] syncToClient: {}", reason);
+            LOG.debug("[AngelDemonMenu] syncToClient: {}", reason);
             this.broadcastChanges();
             try {
                 this.sendAllDataToRemote();
             } catch (Throwable ignored) {}
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] syncToClient failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] syncToClient failed: {}", t.toString());
         }
     }
 
@@ -507,7 +509,7 @@ public class AngelMenu extends AbstractContainerMenu {
             });
             stack.set(DataComponents.CUSTOM_DATA, cleaned);
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] clearPreviewTags failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] clearPreviewTags failed: {}", t.toString());
         }
     }
 
@@ -543,7 +545,7 @@ public class AngelMenu extends AbstractContainerMenu {
             if (it instanceof CrossbowItem) return true;
             if (it instanceof ShieldItem) return true;
         } catch (Throwable t) {
-            LOG.error("[AngelMenu] isCombatItem failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] isCombatItem failed: {}", t.toString());
         }
 
         return false;

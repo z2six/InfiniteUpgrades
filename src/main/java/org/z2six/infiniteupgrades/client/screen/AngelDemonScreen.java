@@ -3,7 +3,6 @@ package org.z2six.infiniteupgrades.client.screen;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.component.DataComponents;
@@ -15,47 +14,47 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.world.menu.AngelMenu;
+import org.z2six.infiniteupgrades.client.widget.TriStateImageButton;
 import org.z2six.infiniteupgrades.logic.RitualType;
+import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Renders the custom Angel container GUI and tooltips.
- * PNG is 512x512, but we only draw the top-left 274x166 region.
+ * Angel/Demon GUI screen (one PNG per element; no cropping).
  *
- * Tooltips:
- *  - PREVIEW (slot 2 with iu_preview=true):
- *      Obfuscates numeric parts (same as before).
- *  - REAL items (any slot, including output after infusion):
- *      We augment each combat-attribute line by appending " (+X%)"
- *      where X is the accumulated percent from the item audit
- *      (iu_upgrade -> totals[<attrId>] -> sumPercent).
+ * main.png:    176x222 (drawn at leftPos, topPos)
+ * details.png: 128x222 drawn at (leftPos + 176 + 1, topPos), i.e., 1px gap
+ * buttons:     90x18; all three states drawn at the *same* spot, per ritual
  *
- * Button:
- *  - "Infuse" sends a menu button click (server receives in AngelMenu.clickMenuButton).
+ * Slot & button anchors are MAIN-space (relative to main.png origin),
+ * so we place widgets at leftPos + anchorX, topPos + anchorY.
  */
-public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
+public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static final Logger LOG = LogUtils.getLogger();
 
-    private static final ResourceLocation BG_ANGEL =
-            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/angel_menu.png");
-    private static final ResourceLocation BG_DEMON =
-            ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/demon_menu.png");
+    // Main & details sizes
+    private static final int MAIN_W = 176;
+    private static final int MAIN_H = 222;
+    private static final int DETAILS_W = 128;
+    private static final int DETAILS_H = 222;
+    private static final int GAP = 1;
 
-    // Actual GUI portion size (top-left of 512x512)
-    private static final int IMAGE_W = 274;
-    private static final int IMAGE_H = 166;
+    // Composite canvas used for centering the screen
+    private static final int CANVAS_W = MAIN_W + GAP + DETAILS_W; // 176 + 1 + 128 = 305
+    private static final int CANVAS_H = 222;
 
-    // Regex: leading numeric token (int/float, optional sign), then space, then rest
+    // Button size & MAIN-space anchor
+    private static final int BTN_W = 90;
+    private static final int BTN_H = 18;
+    private static final int BTN_X = 44;  // X44/Y107
+    private static final int BTN_Y = 107;
+
+    // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
-    // Regex: bracketed breakdowns like "[1 + 7]" (non-greedy)
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
-
-    // Mapping displayed English names to our audit attribute ids
-    // (Safe best-effort; if the user's language differs, we still show vanilla text.)
     private static final Map<String, String> DISPLAY_TO_ATTR_ID = Map.of(
             "attack damage", "minecraft:generic.attack_damage",
             "attack speed", "minecraft:generic.attack_speed",
@@ -64,39 +63,83 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
             "armor", "minecraft:generic.armor"
     );
 
-    private Button infuseBtn;
+    private TriStateImageButton infuseBtn;
 
-    public AngelScreen(AngelMenu menu, Inventory inv, Component title) {
+    public AngelDemonScreen(AngelDemonMenu menu, Inventory inv, Component title) {
         super(menu, inv, Component.empty());
-        this.imageWidth = IMAGE_W;
-        this.imageHeight = IMAGE_H;
+        // Center a COMPOSITE canvas (main + gap + details)
+        this.imageWidth = CANVAS_W;
+        this.imageHeight = CANVAS_H;
+
+        // We hide vanilla labels for now
         this.titleLabelX = 8;
         this.titleLabelY = 6;
         this.inventoryLabelX = 8;
         this.inventoryLabelY = this.imageHeight - 96 + 2;
     }
 
+    private ResourceLocation rl(String path) {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", path);
+    }
+
+    private String folder() {
+        return this.menu.ritual() == RitualType.DEMON ? "demon" : "angel";
+    }
+
+    private ResourceLocation mainTex() {
+        return rl("textures/gui/container/" + folder() + "/main.png");
+    }
+
+    private ResourceLocation detailsTex() {
+        return rl("textures/gui/container/" + folder() + "/details.png");
+    }
+
+    private ResourceLocation btnDefaultTex() {
+        return rl("textures/gui/container/" + folder() + "/btn_infuse_default.png");
+    }
+
+    private ResourceLocation btnHoverTex() {
+        return rl("textures/gui/container/" + folder() + "/btn_infuse_hover.png");
+    }
+
+    private ResourceLocation btnLockedTex() {
+        return rl("textures/gui/container/" + folder() + "/btn_infuse_locked.png");
+    }
+
     @Override
     protected void init() {
         super.init();
-        LOG.debug("[AngelScreen] init at {},{}", leftPos, topPos);
+        LOG.debug("[AngelDemonScreen] init at {},{}", leftPos, topPos);
 
-        // Add a simple "Infuse" button (server action)
-        int bx = leftPos + 176 + 8; // tweak position as needed
-        int by = topPos + 18;
-        infuseBtn = Button.builder(Component.literal("Infuse"), b -> {
-            try {
-                if (this.minecraft != null && this.minecraft.gameMode != null) {
-                    LOG.info("[AngelScreen] INFUSE click -> sending button {} for container {}", AngelMenu.BUTTON_INFUSE, this.menu.containerId);
-                    this.minecraft.gameMode.handleInventoryButtonClick(this.menu.containerId, AngelMenu.BUTTON_INFUSE);
-                } else {
-                    LOG.warn("[AngelScreen] INFUSE click but gameMode is null");
+        // Button is placed on MAIN panel at (44,107)
+        int bx = leftPos + BTN_X;
+        int by = topPos + BTN_Y;
+
+        infuseBtn = new TriStateImageButton(
+                bx, by, BTN_W, BTN_H,
+                btnDefaultTex(),
+                btnHoverTex(),
+                btnLockedTex(),
+                () -> {
+                    try {
+                        if (this.minecraft != null && this.minecraft.gameMode != null) {
+                            if (infuseBtn.isLocked()) return;
+                            this.minecraft.gameMode.handleInventoryButtonClick(this.menu.containerId, AngelDemonMenu.BUTTON_INFUSE);
+                            // Placeholder: hardcoded 3s lock (server-authoritative hookup later)
+                            infuseBtn.lockForSeconds(3);
+                        }
+                    } catch (Throwable t) {
+                        LOG.error("[AngelDemonScreen] Infuse onPress failed", t);
+                    }
                 }
-            } catch (Throwable t) {
-                LOG.error("[AngelScreen] Infuse click failed", t);
-            }
-        }).bounds(bx, by, 80, 20).build();
+        );
         this.addRenderableWidget(infuseBtn);
+    }
+
+    @Override
+    protected void containerTick() {
+        super.containerTick();
+        if (infuseBtn != null) infuseBtn.clientTickLock();
     }
 
     @Override
@@ -104,7 +147,7 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // Background first
         this.renderBackground(gg, mouseX, mouseY, partialTick);
 
-        // Decide if we intercept for preview or augment for real items
+        // Tooltip handling
         Slot hoveredBefore = this.hoveredSlot;
         boolean interceptPreview = false;
         boolean augmentReal = false;
@@ -112,52 +155,49 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         if (hoveredBefore != null && hoveredBefore.hasItem()) {
             ItemStack s = hoveredBefore.getItem();
             if (hoveredBefore.index == 2 && isPreview(s)) {
-                interceptPreview = true; // custom obfuscated tooltip
+                interceptPreview = true;
             } else {
-                augmentReal = true;      // vanilla + "(+X%)" tail on combat lines
+                augmentReal = true;
             }
         }
 
         if (interceptPreview) {
-            // Prevent super.render from drawing vanilla tooltip for PREVIEW *this frame only*.
-            this.hoveredSlot = null;
-            LOG.debug("[AngelScreen] Intercepting tooltip for preview in slot 2");
+            this.hoveredSlot = null; // suppress vanilla tooltip this frame
         }
 
         // Draw everything (slots/items/widgets)
         super.render(gg, mouseX, mouseY, partialTick);
 
         if (interceptPreview) {
-            // NOTE: DO NOT restore hoveredSlot here (this was causing the tooltip to get "stuck").
-            // Build modified tooltip for PREVIEW using the stack we captured at frame-start.
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
-
             List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
                     .map(Component::getVisualOrderText)
                     .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         } else if (augmentReal && hoveredBefore != null && hoveredBefore.hasItem()) {
-            // Augment any real item’s tooltip inside our GUI (including output after infusion)
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = appendPercentFromAudit(stack, vanilla);
-
             List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
                     .map(Component::getVisualOrderText)
                     .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         } else {
-            // Not intercepting: let vanilla draw tooltips
             this.renderTooltip(gg, mouseX, mouseY);
         }
     }
 
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
-        ResourceLocation bg = (this.menu.ritual() == RitualType.DEMON) ? BG_DEMON : BG_ANGEL;
-        gg.blit(bg, leftPos, topPos, 0, 0, imageWidth, imageHeight, 512, 512);
+        // 1) Main background (exact-sized)
+        gg.blit(mainTex(), leftPos, topPos, 0, 0, MAIN_W, MAIN_H, MAIN_W, MAIN_H);
+
+        // 2) Details panel to the right with 1px gap
+        int panelX = leftPos + MAIN_W + GAP;
+        int panelY = topPos;
+        gg.blit(detailsTex(), panelX, panelY, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
     }
 
     @Override
@@ -165,16 +205,14 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         // no labels for now
     }
 
-    // ---- Tooltip post-processing ---------------------------------------------------------------
+    // ---------------- Tooltip helpers ----------------
 
-    /** Only used for the PREVIEW ghost. */
     private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
         List<Component> out = new ArrayList<>(vanilla.size());
         for (Component c : vanilla) {
             String raw = c.getString();
             String lower = raw.toLowerCase();
 
-            // Skip equipment-slot headers like "When in Main Hand"
             if (lower.startsWith("when ")) {
                 out.add(c);
                 continue;
@@ -192,22 +230,18 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
                 continue;
             }
 
-            // Try to split "number + rest"
             Matcher m = LEADING_NUM.matcher(raw);
             if (!m.find()) {
-                // No leading number detected; as a fallback, obfuscate any bracketed breakdowns only.
                 out.add(obfuscateBracketsOnly(raw));
                 continue;
             }
 
-            String num = m.group(1);   // leading numeric token
-            String rest = m.group(2);  // remainder (attribute name etc., may include [..])
+            String num = m.group(1);
+            String rest = m.group(2);
 
             MutableComponent rebuilt = Component.literal("")
-                    // obfuscated number
                     .append(Component.literal(num).withStyle(ChatFormatting.OBFUSCATED))
                     .append(Component.literal(" "))
-                    // rest with bracketed parts obfuscated (but attribute name readable)
                     .append(obfuscateBracketSegments(rest));
 
             out.add(rebuilt);
@@ -215,24 +249,20 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         return out;
     }
 
-    /** For REAL items: append " (+X%)" to combat lines based on our audit totals. */
     private static List<Component> appendPercentFromAudit(ItemStack stack, List<Component> vanilla) {
-        // Read totals map once
         Map<String, Double> totals = readAuditPercents(stack);
-        if (totals.isEmpty()) return vanilla; // nothing to add
+        if (totals.isEmpty()) return vanilla;
 
         List<Component> out = new ArrayList<>(vanilla.size());
         for (Component c : vanilla) {
             String raw = c.getString();
             String lower = raw.toLowerCase();
 
-            // Equipment-slot headers etc.
             if (lower.startsWith("when ")) {
                 out.add(c);
                 continue;
             }
 
-            // Identify which attribute line this is (english match best-effort)
             String matchedAttrId = null;
             for (Map.Entry<String, String> e : DISPLAY_TO_ATTR_ID.entrySet()) {
                 if (lower.contains(e.getKey())) {
@@ -251,10 +281,8 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
                 continue;
             }
 
-            // Build " (+X%)" with color by sign
-            String pctText = formatPercent(sumPct); // e.g., "+15%" or "-5%"
+            String pctText = formatPercent(sumPct);
             ChatFormatting col = sumPct >= 0.0 ? ChatFormatting.DARK_GREEN : ChatFormatting.RED;
-
             MutableComponent withTail = c.copy().append(Component.literal(" (" + pctText + ")").withStyle(col));
             out.add(withTail);
         }
@@ -283,7 +311,6 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
     }
 
     private static String formatPercent(double frac) {
-        // Convert fraction to percent string; keep one decimal if needed.
         double val = frac * 100.0;
         double abs = Math.abs(val);
         String sign = val >= 0 ? "+" : "-";
@@ -295,7 +322,6 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         }
     }
 
-    /** Obfuscate every [...] segment in the input, preserving other text. */
     private static MutableComponent obfuscateBracketSegments(String text) {
         MutableComponent result = Component.literal("");
         int idx = 0;
@@ -314,12 +340,9 @@ public class AngelScreen extends AbstractContainerScreen<AngelMenu> {
         return result;
     }
 
-    /** Fallback: no leading number; obfuscate only the bracketed parts if present. */
     private static MutableComponent obfuscateBracketsOnly(String text) {
         return obfuscateBracketSegments(text);
     }
-
-    // ---- Helpers ------------------------------------------------------------------------------
 
     private static boolean isPreview(ItemStack stack) {
         try {
