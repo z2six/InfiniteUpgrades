@@ -76,7 +76,7 @@ public final class TooltipHooks {
             // 1) Build map: attribute-id -> compounded percent (Double)
             final Map<String, Double> pctByAttrId = computeAllAttributePercents(stack);
             if (pctByAttrId.isEmpty()) {
-                debug("No IU % available for this stack (no/invalid iu_upgrade history).");
+                // debug("No IU % available for this stack (no/invalid iu_upgrade history).");
                 return;
             }
 
@@ -157,7 +157,7 @@ public final class TooltipHooks {
                 appendedCount++;
             }
 
-            debug("Appended % to {} tooltip line(s).", appendedCount);
+            // debug("Appended % to {} tooltip line(s).", appendedCount);
         } catch (Throwable t) {
             // Never crash tooltips – log and continue.
             LOG.error("[InfiniteUpgrades] Tooltip augmentation failed (defensive skip).", t);

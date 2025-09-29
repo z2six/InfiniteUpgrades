@@ -1,4 +1,5 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelDemonMenu.java
+// File: src/main/java/org/z2six/infiniteuprades/world/menu/AngelDemonMenu.java
+
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -29,6 +30,7 @@ import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.Reputation;
 import org.z2six.infiniteupgrades.logic.RitualType;
 import org.z2six.infiniteupgrades.logic.UpgradeService;
+import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.registry.ModMenus;
 
 import java.util.Set;
@@ -36,34 +38,40 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Angel/Demon menu (context-aware). Slot positions are measured relative to the top-left
- * of the main panel texture (176x222). We center a COMPOSITE canvas of (main + 1px gap + details).
+ * Angel/Demon menu (unified). Context-aware:
+ *  - RitualType.ANGEL -> upgrade all eligible attributes each success
+ *  - RitualType.DEMON -> upgrade one random eligible attribute each success
  *
- * Slot anchors per spec (MAIN-space, i.e., relative to main.png origin).
- * NOTE: All slots are shifted 1px left and 1px up for perfect alignment.
+ * Reputation:
+ *  - Applied as extra success chance bonus (server-authoritative).
+ *  - Updated (+/-) on SUCCESS/FAIL attempts, with cross-coupling.
+ *  - We now send a rep snapshot S2C after each actual attempt (resource consumed),
+ *    so the client’s pointer updates immediately.
  *
- *  - Inputs:  (62,36), (98,36)
- *  - Output:  (80,72)
- *  - Inv 3x9: top-left at (8,140), step 18px (16 slot + 2 gap)
- *  - Hotbar:  top-left at (8,198), step 18px
+ * Slot anchors are based on the **main.png** coordinates you provided.
  */
 public class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // ---------------- Slot coordinates (MAIN-space, shifted -1,-1) ----------------
-    public static final int INPUT1_X = 62;
-    public static final int INPUT1_Y = 36;
+    // ---------------- Slot coordinates (main.png-relative anchors) ----------------
+    // Two inputs + one output on main.png
+    public static final int INPUT1_X = 63;
+    public static final int INPUT1_Y = 37;
 
-    public static final int INPUT2_X = 98;
-    public static final int INPUT2_Y = 36;
+    public static final int INPUT2_X = 99;
+    public static final int INPUT2_Y = 37;
 
-    public static final int OUTPUT_X = 80;
-    public static final int OUTPUT_Y = 72;
+    public static final int OUTPUT_X = 81;
+    public static final int OUTPUT_Y = 73;
 
-    // Player inv anchors (MAIN-space)
-    private static final int PLAYER_INV_X = 8;    // top-left of 3x9 grid
-    private static final int PLAYER_INV_Y = 140;
-    private static final int HOTBAR_Y     = 198;  // top-left of 1x9 bar
+    // Player inventory grid (3x9), top-left anchor and spacing (16px slot + 2px gap = 18 step)
+    private static final int PLAYER_INV_X = 9;
+    private static final int PLAYER_INV_Y = 141;
+    private static final int SLOT_STEP = 18;
+
+    // Hotbar (1x9), top-left anchor
+    private static final int HOTBAR_X = 9;
+    private static final int HOTBAR_Y = 199;
 
     // Button id
     public static final int BUTTON_INFUSE = 0;
@@ -85,7 +93,8 @@ public class AngelDemonMenu extends AbstractContainerMenu {
 
     // Backing inventory (3 slots) – invokes slotsChanged on edits
     private final Container baseInv = new SimpleContainer(3) {
-        @Override public void setChanged() {
+        @Override
+        public void setChanged() {
             super.setChanged();
             if (suppressPreviewUpdate) return;
             try {
@@ -132,18 +141,18 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 }
             });
 
-            // Player inventory (3 rows)
+            // Player inventory (3 rows x 9)
             for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 9; ++col) {
                     this.addSlot(new Slot(inv, col + row * 9 + 9,
-                            PLAYER_INV_X + col * 18,
-                            PLAYER_INV_Y + row * 18));
+                            PLAYER_INV_X + col * SLOT_STEP,
+                            PLAYER_INV_Y + row * SLOT_STEP));
                 }
             }
-            // Hotbar
+            // Hotbar (1 x 9)
             for (int col = 0; col < 9; ++col) {
                 this.addSlot(new Slot(inv, col,
-                        PLAYER_INV_X + col * 18,
+                        HOTBAR_X + col * SLOT_STEP,
                         HOTBAR_Y));
             }
 
@@ -246,6 +255,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
 
             boolean success = player.getRandom().nextDouble() < finalChance;
 
+            // ---- This is the exact point the attempt "starts" (we consume the resource) ----
             // Consume one resource on attempt
             res.shrink(1);
             baseInv.setItem(1, res);
@@ -253,6 +263,8 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             // Reputation deltas (attempt-based)
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 Reputation.applyAttemptDelta(sp, ritual, success);
+                // Send a fresh snapshot to the client (so the pointer moves immediately)
+                ModNet.sendRepSnapshotTo(sp);
             } else {
                 LOG.warn("[AngelDemonMenu] applyAttemptDelta skipped: not a ServerPlayer");
             }

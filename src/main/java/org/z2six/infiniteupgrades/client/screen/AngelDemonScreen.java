@@ -1,8 +1,12 @@
+// File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelDemonScreen.java
+
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.component.DataComponents;
@@ -14,8 +18,11 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.client.widget.TriStateImageButton;
+import org.z2six.infiniteupgrades.client.screen.view.DetailsPanelView;
+import org.z2six.infiniteupgrades.client.screen.view.MainGuiView;
+import org.z2six.infiniteupgrades.client.screen.view.ReputationBarView;
 import org.z2six.infiniteupgrades.logic.RitualType;
+import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
 import java.util.*;
@@ -23,38 +30,32 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Angel/Demon GUI screen (one PNG per element; no cropping).
+ * Angel/Demon GUI screen split into sub-views:
+ *  - MainGuiView       (main panel + infuse button)
+ *  - DetailsPanelView  (static panel on the right)
+ *  - ReputationBarView (above the main panel, centered on the main only)
  *
- * main.png:    176x222 (drawn at leftPos, topPos)
- * details.png: 128x222 drawn at (leftPos + 176 + 1, topPos), i.e., 1px gap
- * buttons:     90x18; all three states drawn at the *same* spot, per ritual
- *
- * Slot & button anchors are MAIN-space (relative to main.png origin),
- * so we place widgets at leftPos + anchorX, topPos + anchorY.
+ * Group centering: (Main + 1px + Details) are centered as one unit.
+ * Reputation bar sits above main and does not push the group downward.
  */
 public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // Main & details sizes
-    private static final int MAIN_W = 176;
-    private static final int MAIN_H = 222;
-    private static final int DETAILS_W = 128;
-    private static final int DETAILS_H = 222;
-    private static final int GAP = 1;
+    // Group dimensions: group = main(176) + 1 + details(128) = 305 width, height = 222 (max of both)
+    private static final int GROUP_W = MainGuiView.MAIN_W + MainGuiView.GAP_TO_DETAILS + DetailsPanelView.DETAILS_W;
+    private static final int GROUP_H = 222;
 
-    // Composite canvas used for centering the screen
-    private static final int CANVAS_W = MAIN_W + GAP + DETAILS_W; // 176 + 1 + 128 = 305
-    private static final int CANVAS_H = 222;
+    // Rep bar dims
+    private static final int REP_W = 96;
+    private static final int REP_H = 11;
 
-    // Button size & MAIN-space anchor
-    private static final int BTN_W = 90;
-    private static final int BTN_H = 18;
-    private static final int BTN_X = 44;  // X44/Y107
-    private static final int BTN_Y = 107;
+    // Fudge used by subviews (keep here as well for computing rep bar vertical anchor)
+    private static final int DRAW_FUDGE_Y = -1;
 
-    // Tooltip helpers
+    // Tooltip helpers (same logic you had)
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
+
     private static final Map<String, String> DISPLAY_TO_ATTR_ID = Map.of(
             "attack damage", "minecraft:generic.attack_damage",
             "attack speed", "minecraft:generic.attack_speed",
@@ -63,83 +64,84 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
             "armor", "minecraft:generic.armor"
     );
 
-    private TriStateImageButton infuseBtn;
+    private MainGuiView mainView;
+    private DetailsPanelView detailsView;
+    private ReputationBarView repView;
 
     public AngelDemonScreen(AngelDemonMenu menu, Inventory inv, Component title) {
         super(menu, inv, Component.empty());
-        // Center a COMPOSITE canvas (main + gap + details)
-        this.imageWidth = CANVAS_W;
-        this.imageHeight = CANVAS_H;
-
-        // We hide vanilla labels for now
-        this.titleLabelX = 8;
-        this.titleLabelY = 6;
-        this.inventoryLabelX = 8;
-        this.inventoryLabelY = this.imageHeight - 96 + 2;
+        // Center the **group**
+        this.imageWidth  = GROUP_W;
+        this.imageHeight = GROUP_H;
+        // We don't render vanilla labels
+        this.titleLabelX = 0;
+        this.titleLabelY = 0;
+        this.inventoryLabelX = 0;
+        this.inventoryLabelY = 0;
     }
 
-    private ResourceLocation rl(String path) {
-        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", path);
+    // --- Helpers exposed for sub-views ---
+
+    public int getLeftPos() { return this.leftPos; }
+    public int getTopPos()  { return this.topPos; }
+
+    public AngelDemonMenu getMenu() { return this.menu; }
+    public Minecraft getMinecraft() { return this.minecraft; }
+
+    /** Public helper to add widgets from child views without exposing protected addRenderableWidget. */
+    public void addToScreen(AbstractWidget widget) {
+        this.addRenderableWidget(widget);
     }
 
-    private String folder() {
+    public String folder() {
         return this.menu.ritual() == RitualType.DEMON ? "demon" : "angel";
     }
 
-    private ResourceLocation mainTex() {
-        return rl("textures/gui/container/" + folder() + "/main.png");
+    /** Reputation textures (repbar + pointer). */
+    private ResourceLocation repTex() {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/repbar.png");
+    }
+    private ResourceLocation repPointerTex() {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/pointer.png");
     }
 
-    private ResourceLocation detailsTex() {
-        return rl("textures/gui/container/" + folder() + "/details.png");
-    }
-
-    private ResourceLocation btnDefaultTex() {
-        return rl("textures/gui/container/" + folder() + "/btn_infuse_default.png");
-    }
-
-    private ResourceLocation btnHoverTex() {
-        return rl("textures/gui/container/" + folder() + "/btn_infuse_hover.png");
-    }
-
-    private ResourceLocation btnLockedTex() {
-        return rl("textures/gui/container/" + folder() + "/btn_infuse_locked.png");
-    }
+    // --- Lifecycle ---
 
     @Override
     protected void init() {
         super.init();
-        LOG.debug("[AngelDemonScreen] init at {},{}", leftPos, topPos);
+        LOG.debug("[AngelDemonScreen] init at {},{} (group centered)", leftPos, topPos);
 
-        // Button is placed on MAIN panel at (44,107)
-        int bx = leftPos + BTN_X;
-        int by = topPos + BTN_Y;
+        // Create subviews
+        mainView = new MainGuiView(this);
+        detailsView = new DetailsPanelView(this);
 
-        infuseBtn = new TriStateImageButton(
-                bx, by, BTN_W, BTN_H,
-                btnDefaultTex(),
-                btnHoverTex(),
-                btnLockedTex(),
-                () -> {
-                    try {
-                        if (this.minecraft != null && this.minecraft.gameMode != null) {
-                            if (infuseBtn.isLocked()) return;
-                            this.minecraft.gameMode.handleInventoryButtonClick(this.menu.containerId, AngelDemonMenu.BUTTON_INFUSE);
-                            // Placeholder: hardcoded 3s lock (server-authoritative hookup later)
-                            infuseBtn.lockForSeconds(3);
-                        }
-                    } catch (Throwable t) {
-                        LOG.error("[AngelDemonScreen] Infuse onPress failed", t);
-                    }
-                }
-        );
-        this.addRenderableWidget(infuseBtn);
+        // Rep bar anchor: centered relative to the MAIN panel only
+        int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
+        // 1px gap above main; include the same DRAW_FUDGE_Y used by views for visual alignment
+        int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
+        // UPDATED: pass texture locations explicitly (new ReputationBarView ctor)
+        repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
+
+        // Add & init subview widgets
+        mainView.onInit();
+
+        // Ask the server for the current reputation snapshot
+        ModNet.requestRepSnapshot();
+    }
+
+    /** Called from ModNet client handler on S2C snapshot arrival. */
+    public void acceptRepSnapshot(double angel, double demon) {
+        if (repView != null) {
+            // UPDATED: method name changed in ReputationBarView
+            repView.acceptServerValues(angel, demon);
+        }
     }
 
     @Override
     protected void containerTick() {
         super.containerTick();
-        if (infuseBtn != null) infuseBtn.clientTickLock();
+        if (mainView != null) mainView.tick();
     }
 
     @Override
@@ -147,7 +149,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Background first
         this.renderBackground(gg, mouseX, mouseY, partialTick);
 
-        // Tooltip handling
+        // Tooltip routing
         Slot hoveredBefore = this.hoveredSlot;
         boolean interceptPreview = false;
         boolean augmentReal = false;
@@ -165,10 +167,12 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
             this.hoveredSlot = null; // suppress vanilla tooltip this frame
         }
 
-        // Draw everything (slots/items/widgets)
         super.render(gg, mouseX, mouseY, partialTick);
 
-        if (interceptPreview) {
+        // Draw reputation overlay after the base UI so it's on top
+        if (repView != null) repView.render(gg);
+
+        if (interceptPreview && hoveredBefore != null && hoveredBefore.hasItem()) {
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
@@ -191,21 +195,16 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
-        // 1) Main background (exact-sized)
-        gg.blit(mainTex(), leftPos, topPos, 0, 0, MAIN_W, MAIN_H, MAIN_W, MAIN_H);
-
-        // 2) Details panel to the right with 1px gap
-        int panelX = leftPos + MAIN_W + GAP;
-        int panelY = topPos;
-        gg.blit(detailsTex(), panelX, panelY, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
+        if (mainView != null) mainView.renderBg(gg);
+        if (detailsView != null) detailsView.renderBg(gg);
     }
 
     @Override
     protected void renderLabels(GuiGraphics gg, int mouseX, int mouseY) {
-        // no labels for now
+        // no vanilla labels
     }
 
-    // ---------------- Tooltip helpers ----------------
+    // ---------------- Tooltip helpers (unchanged core logic) ----------------
 
     private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
         List<Component> out = new ArrayList<>(vanilla.size());

@@ -1,3 +1,5 @@
+// File: src/main/java/org/z2six/infiniteupgrades/logic/Reputation.java
+
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;

@@ -1,7 +1,10 @@
+// File: src/main/java/org/z2six/infiniteupgrades/client/widget/TriStateImageButton.java
+
 package org.z2six.infiniteupgrades.client.widget;
 
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -12,7 +15,7 @@ import net.minecraft.resources.ResourceLocation;
  *  - hover
  *  - locked (click-disabled)
  *
- * Each texture is the exact drawable size (no extra canvas).
+ * Textures are full images (no atlases); we pass the real texture size to blit() to avoid stretching.
  */
 public final class TriStateImageButton extends AbstractWidget {
     private final ResourceLocation texDefault;
@@ -22,11 +25,19 @@ public final class TriStateImageButton extends AbstractWidget {
     private final int drawW;
     private final int drawH;
 
+    // The texture's actual (native) width/height for UV mapping
+    private final int texW;
+    private final int texH;
+
     private boolean locked = false;
     private int lockTicksRemaining = 0; // client-side cooldown ticks (20 tps)
 
     private final Runnable onPressRunnable;
 
+    /**
+     * @param w drawn width (and native texture width)
+     * @param h drawn height (and native texture height)
+     */
     public TriStateImageButton(int x, int y, int w, int h,
                                ResourceLocation texDefault,
                                ResourceLocation texHover,
@@ -35,6 +46,8 @@ public final class TriStateImageButton extends AbstractWidget {
         super(x, y, w, h, Component.empty());
         this.drawW = w;
         this.drawH = h;
+        this.texW = w; // IMPORTANT: the PNGs are exactly this size
+        this.texH = h;
         this.texDefault = texDefault;
         this.texHover = texHover;
         this.texLocked = texLocked;
@@ -55,7 +68,7 @@ public final class TriStateImageButton extends AbstractWidget {
         lockForTicks(seconds * 20);
     }
 
-    /** Decrements the lock timer. Call from screen.tick/containerTick. */
+    /** Decrements the lock timer. Call from screen.containerTick. */
     public void clientTickLock() {
         if (!locked) return;
         if (lockTicksRemaining > 0) {
@@ -70,8 +83,8 @@ public final class TriStateImageButton extends AbstractWidget {
     @Override
     protected void renderWidget(GuiGraphics gg, int mouseX, int mouseY, float partialTick) {
         ResourceLocation tex = locked ? texLocked : (isHovered() ? texHover : texDefault);
-        // Textures are exact-sized; use drawW/drawH for both image and texture sizes
-        gg.blit(tex, getX(), getY(), 0, 0, drawW, drawH, drawW, drawH);
+        // Use the real texture size for UVs to avoid stretching
+        gg.blit(tex, getX(), getY(), 0, 0, drawW, drawH, texW, texH);
     }
 
     @Override
@@ -82,6 +95,6 @@ public final class TriStateImageButton extends AbstractWidget {
 
     @Override
     protected void updateWidgetNarration(NarrationElementOutput narration) {
-        // No-op for now (pure image button with no spoken text)
+        narration.add(NarratedElementType.TITLE, Component.literal("Infuse"));
     }
 }
