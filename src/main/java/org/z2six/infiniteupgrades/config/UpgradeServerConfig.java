@@ -43,7 +43,7 @@ public final class UpgradeServerConfig {
     private static ReputationConfigSpec REPUTATION_SPEC;
     private static AttributesConfigSpec ATTR_SPEC;
     private static SoulsConfigSpec      SOULS_SPEC;
-    private static TuningConfigSpec     TUNING_SPEC;   // NEW: preview stepPercent + bonusSteps
+    private static TuningConfigSpec     TUNING_SPEC;   // preview stepPercent + bonusSteps
 
     public static final ModConfigSpec SPEC;
 
@@ -51,7 +51,7 @@ public final class UpgradeServerConfig {
         // Attach all sections to the single builder (key paths preserved)
         GENERAL_SPEC    = GeneralConfigSpec.define(B);
         CHANCE_SPEC     = ChanceConfigSpec.define(B);
-        TUNING_SPEC     = TuningConfigSpec.define(B);      // NEW
+        TUNING_SPEC     = TuningConfigSpec.define(B);
         RITUALS_SPEC    = RitualsConfigSpec.define(B);
         REPUTATION_SPEC = ReputationConfigSpec.define(B);
         ATTR_SPEC       = AttributesConfigSpec.define(B);
@@ -70,17 +70,17 @@ public final class UpgradeServerConfig {
         public final ChanceModelType chanceModel;
         public final double startChance;
         public final double decrementPerLevel;
-        public final double minChance;           // NEW
+        public final double minChance;           // minimum floor for chance models
         public final double exponentialBase;
         public final Map<Integer, Double> chanceOverrides;
 
         public final double angelStepMult;
         public final double demonStepMult;
 
+        // Unified reputation (no cross-coupling in unified model)
         public final int repMax;
         public final double repDeltaSuccess;
         public final double repDeltaFail;
-        public final double repCross;
         public final double repBonusPerPoint;
         public final double repBonusClamp;
 
@@ -88,14 +88,14 @@ public final class UpgradeServerConfig {
 
         public final SoulsConfig souls;
 
-        // NEW: server-authoritative preview tuning (client preview reads from this)
+        // server-authoritative preview tuning (client preview reads from this)
         public final TuningConfigSpec.Snapshot tuning;
 
         private Snapshot(UpgradeMode mode, int maxLevel,
                          ChanceModelType cm, double start, double dec, double min,
                          double expBase, Map<Integer, Double> overrides,
                          double angelMult, double demonMult,
-                         int repMax, double repSucc, double repFail, double repCross,
+                         int repMax, double repSucc, double repFail,
                          double repBonusPerPoint, double repBonusClamp,
                          List<AttributeRuleConfig> attrs,
                          SoulsConfig souls,
@@ -116,7 +116,6 @@ public final class UpgradeServerConfig {
             this.repMax = repMax;
             this.repDeltaSuccess = repSucc;
             this.repDeltaFail = repFail;
-            this.repCross = repCross;
             this.repBonusPerPoint = repBonusPerPoint;
             this.repBonusClamp = repBonusClamp;
 
@@ -234,7 +233,7 @@ public final class UpgradeServerConfig {
             // Rituals
             RitualsConfigSpec.Snapshot rs = RITUALS_SPEC.snapshot();
 
-            // Reputation
+            // Reputation (unified)
             ReputationConfigSpec.Snapshot reps = REPUTATION_SPEC.snapshot();
 
             // Attributes
@@ -264,7 +263,7 @@ public final class UpgradeServerConfig {
                     cs.model,
                     cs.startChance,
                     cs.decrementPerLevel,
-                    cs.minChance,          // NEW
+                    cs.minChance,
                     cs.exponentialBase,
                     cs.overrides,
                     rs.angelStepMult,
@@ -272,16 +271,15 @@ public final class UpgradeServerConfig {
                     reps.repMax,
                     reps.repDeltaSuccess,
                     reps.repDeltaFail,
-                    reps.repCross,
                     reps.repBonusPerPoint,
                     reps.repBonusClamp,
                     as.rules,
                     souls,
-                    ts                        // NEW
+                    ts
             );
         } catch (Throwable t) {
             LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
-            // Fallback mirrors original values closely.
+            // Fallback mirrors original values closely (with unified reputation).
             return new Snapshot(
                     UpgradeMode.RANDOM,
                     20,
@@ -290,7 +288,8 @@ public final class UpgradeServerConfig {
                     0.95,               // exponentialBase
                     parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
                     1.0, 1.5,
-                    100, 0.1, 0.0, 1.0, 0.001, 0.20,
+                    100, 0.1, 0.0,      // repMax, deltaSuccess, deltaFail
+                    0.001, 0.20,        // bonusPerPoint, bonusClamp
                     List.of(
                             new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.attack_damage"), true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
                             new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.attack_speed"),  true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
