@@ -1,5 +1,4 @@
 // File: src/main/java/org/z2six/infiniteupgrades/logic/Reputation.java
-
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;
@@ -10,76 +9,124 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 
 /**
- * Simple per-player reputation store, persisted in Player#getPersistentData().
- * Keys:
- *  iu_rep: {
- *    angel: double,
- *    demon: double
- *  }
+ * Single per-player reputation, persisted in Player#getPersistentData().
+ *
+ * Storage format migration:
+ *  - NEW: iu_rep { value: double }   (unified; negative=demon, positive=angel)
+ *  - OLD: iu_rep { angel: double, demon: double }
+ *        On first read, we convert to unified as (angel - demon), clamp to [-repMax..+repMax],
+ *        write back to 'value', and remove old keys.
  *
  * Clone is handled by RepEvents (PlayerEvent.Clone).
  */
 public final class Reputation {
     private static final Logger LOG = LogUtils.getLogger();
     private static final String ROOT = "iu_rep";
-    private static final String ANGEL = "angel";
-    private static final String DEMON = "demon";
+    private static final String KEY_VALUE = "value";
+    // Legacy keys (for migration)
+    private static final String LEGACY_ANGEL = "angel";
+    private static final String LEGACY_DEMON = "demon";
 
     private Reputation() {}
 
-    public static double get(Player p, RitualType side) {
+    /** Get unified reputation value in [-repMax..+repMax]. */
+    public static double get(Player p) {
         try {
-            CompoundTag t = p.getPersistentData().getCompound(ROOT);
-            String key = side == RitualType.ANGEL ? ANGEL : DEMON;
-            return t.getDouble(key);
-        } catch (Throwable ignored) {
+            CompoundTag root = p.getPersistentData().getCompound(ROOT);
+
+            if (root.contains(KEY_VALUE)) {
+                return root.getDouble(KEY_VALUE);
+            }
+
+            // Migration path: collapse legacy angel/demon into unified.
+            double unified = 0.0;
+            boolean migrated = false;
+
+            if (root.contains(LEGACY_ANGEL) || root.contains(LEGACY_DEMON)) {
+                double angel = root.getDouble(LEGACY_ANGEL);
+                double demon = root.getDouble(LEGACY_DEMON);
+                unified = angel - demon; // captures alignment if they were cross-coupled
+                migrated = true;
+            }
+
+            // Clamp and persist as new format if we had legacy or no value
+            int max = UpgradeServerConfig.snapshot().repMax;
+            unified = clamp(unified, -max, max);
+            root.putDouble(KEY_VALUE, unified);
+
+            // Remove legacy keys if present
+            if (migrated) {
+                root.remove(LEGACY_ANGEL);
+                root.remove(LEGACY_DEMON);
+                LOG.debug("[Reputation] Migrated legacy angel/demon -> unified={} (max={})", unified, max);
+            }
+
+            p.getPersistentData().put(ROOT, root);
+            return unified;
+        } catch (Throwable t) {
+            LOG.error("[Reputation] get failed: {}", t.toString());
             return 0.0;
         }
     }
 
-    public static void set(Player p, RitualType side, double val) {
+    /** Set unified reputation value (clamped). */
+    public static void set(Player p, double val) {
         try {
             int max = UpgradeServerConfig.snapshot().repMax;
             double clamped = clamp(val, -max, max);
             CompoundTag root = p.getPersistentData().getCompound(ROOT);
-            String key = side == RitualType.ANGEL ? ANGEL : DEMON;
-            root.putDouble(key, clamped);
+            root.putDouble(KEY_VALUE, clamped);
             p.getPersistentData().put(ROOT, root);
         } catch (Throwable t) {
             LOG.error("[Reputation] set failed: {}", t.toString());
         }
     }
 
-    public static void add(Player p, RitualType side, double delta) {
-        set(p, side, get(p, side) + delta);
+    /** Add to unified reputation (clamped). */
+    public static void add(Player p, double delta) {
+        set(p, get(p) + delta);
     }
 
-    /** Apply attempt deltas and cross-coupling (server-side). */
+    /**
+     * Apply attempt delta using unified reputation.
+     * Positive delta increases alignment with ANGEL (value -> +),
+     * Negative delta increases alignment with DEMON (value -> -).
+     *
+     * Config semantics preserved:
+     *  - repDeltaSuccess (toward used side on success)
+     *  - repDeltaFail    (toward used side on fail)
+     * Cross-coupling is implicit with a single scalar.
+     */
     public static void applyAttemptDelta(ServerPlayer p, RitualType used, boolean success) {
         try {
             var s = UpgradeServerConfig.snapshot();
-            double delta = success ? s.repDeltaSuccess : s.repDeltaFail;
-            if (delta == 0.0) return;
+            double base = success ? s.repDeltaSuccess : s.repDeltaFail;
+            if (base == 0.0) return;
 
-            RitualType other = (used == RitualType.ANGEL) ? RitualType.DEMON : RitualType.ANGEL;
+            // Sign toward the used side: ANGEL => +, DEMON => -
+            double signed = (used == RitualType.ANGEL) ? base : -base;
 
-            add(p, used, delta);
-            add(p, other, -delta * s.repCross);
+            add(p, signed);
 
-            LOG.debug("[Reputation] attempt: used={} success={} -> rep(angel)={} rep(demon)={}",
-                    used, success, get(p, RitualType.ANGEL), get(p, RitualType.DEMON));
+            LOG.debug("[Reputation] attempt: used={} success={} -> unified={}", used, success, get(p));
         } catch (Throwable t) {
             LOG.error("[Reputation] applyAttemptDelta failed: {}", t.toString());
         }
     }
 
-    /** Linear bonus from reputation; clamped. Positive rep => higher success chance. */
+    /**
+     * Linear bonus from reputation; clamped. Positive unified favors ANGEL, negative favors DEMON.
+     * Ritual perspective:
+     *  - ANGEL: bonus =  (unified) * perPt
+     *  - DEMON: bonus = -(unified) * perPt
+     * Then clamp to ±repBonusClamp.
+     */
     public static double computeBonusFor(Player p, RitualType side) {
         try {
             var s = UpgradeServerConfig.snapshot();
-            double rep = get(p, side); // [-max..+max]
-            double perPt = s.repBonusPerPoint;
-            double bonus = rep * perPt;
+            double unified = get(p);
+            double towardSide = (side == RitualType.ANGEL) ? unified : -unified;
+            double bonus = towardSide * s.repBonusPerPoint;
             double clamp = Math.max(0.0, s.repBonusClamp);
             if (bonus > clamp) bonus = clamp;
             if (bonus < -clamp) bonus = -clamp;
@@ -90,13 +137,11 @@ public final class Reputation {
         }
     }
 
+    /** Copy unified value on clone (respawn/teleport). */
     public static void copyOnClone(Player original, Player clone) {
         try {
-            CompoundTag oldRoot = original.getPersistentData().getCompound(ROOT);
-            CompoundTag newRoot = clone.getPersistentData().getCompound(ROOT);
-            newRoot.putDouble(ANGEL, oldRoot.getDouble(ANGEL));
-            newRoot.putDouble(DEMON, oldRoot.getDouble(DEMON));
-            clone.getPersistentData().put(ROOT, newRoot);
+            double v = get(original);
+            set(clone, v);
         } catch (Throwable t) {
             LOG.error("[Reputation] copyOnClone failed: {}", t.toString());
         }

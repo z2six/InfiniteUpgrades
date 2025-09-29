@@ -1,5 +1,4 @@
-// File: src/main/java/org/z2six/infiniteuprades/client/screen/view/ReputationBarView.java
-
+// File: src/main/java/org/z2six/infiniteupgrades/client/screen/view/ReputationBarView.java
 package org.z2six.infiniteupgrades.client.screen.view;
 
 import com.mojang.logging.LogUtils;
@@ -9,13 +8,13 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
-import org.z2six.infiniteupgrades.logic.RitualType;
 
 /**
- * Renders the reputation bar (96x11) and its pointer (8x11).
- * - Positioned by absolute screen coords provided in ctor.
- * - Pointer center represents the user's reputation in [-100..+100].
- * - If reputation unknown/unavailable, pointer sits at the exact middle.
+ * Renders the reputation bar (96x11) and its pointer (8x11) using a unified value:
+ *  - unified < 0 : demon alignment (LEFT)
+ *  - unified > 0 : angel alignment (RIGHT)
+ *
+ * The bar normalizes against the server-provided repMax, so it works for 100, 1000, 10000, etc.
  */
 public final class ReputationBarView {
     private static final Logger LOG = LogUtils.getLogger();
@@ -35,9 +34,9 @@ public final class ReputationBarView {
     private final int baseX; // absolute screen X where the bar's top-left starts
     private final int baseY; // absolute screen Y where the bar's top-left starts
 
-    // Snapshotted reputation values (from server)
-    private double repAngel = 0.0; // in points, e.g., 0.6, 12.0, etc. (domain [-max..+max])
-    private double repDemon = 0.0;
+    // Unified reputation value from server (domain [-repMax..+repMax]) + repMax
+    private double unified = 0.0;
+    private int repMaxForView = 100; // default; updated from server snapshot
 
     // For one-time init logging / resource verification
     private boolean loggedInit = false;
@@ -79,34 +78,30 @@ public final class ReputationBarView {
         }
     }
 
-    /** Server pushes reputations here (angel & demon). */
-    public void acceptServerValues(double angel, double demon) {
-        this.repAngel = angel;
-        this.repDemon = demon;
-        LOG.debug("[RepBar] acceptServerValues angel={} demon={}", angel, demon);
+    /** Server pushes unified reputation + repMax here. */
+    public void acceptServerValues(double unified, int repMax) {
+        this.unified = unified;
+        this.repMaxForView = Math.max(1, repMax);
+        LOG.debug("[RepBar] acceptServerValues unified={} repMax={}", unified, this.repMaxForView);
     }
 
-    /** Called each tick; nothing to animate yet, but kept for symmetry. */
+    /** Called each tick; nothing to animate yet. */
     public void tick() {
-        // No-op for now (no smoothing/animation requested yet).
+        // No-op
     }
 
     /**
      * Render the bar and pointer.
      * Pointer is centered horizontally at baseX + BAR_W/2 for 0 rep.
-     * -100 -> pointer center at baseX (left edge)
-     * +100 -> pointer center at baseX + BAR_W (right edge)
+     * -repMax -> pointer center at baseX (left edge)
+     * +repMax -> pointer center at baseX + BAR_W (right edge)
      * Note: pointer is 8px wide; its left draw X is (center - PTR_W/2).
      */
     public void render(GuiGraphics gg) {
-        // One-time init log (ritual + current rep we’ll use)
+        // One-time init log
         if (!loggedInit) {
             loggedInit = true;
-            LOG.debug("[RepBar] init: ritual={} player={} repAngel={} repDemon={} (client snapshot)",
-                    screen.getMenu().ritual(),
-                    (screen.getMinecraft() != null && screen.getMinecraft().player != null
-                            ? screen.getMinecraft().player.getGameProfile().getName() : "?"),
-                    repAngel, repDemon);
+            LOG.debug("[RepBar] init: unified={} repMax={} (client snapshot)", unified, repMaxForView);
         }
 
         // Draw BAR
@@ -118,13 +113,8 @@ public final class ReputationBarView {
                     BAR_W, BAR_H); // exact pixels, no scaling
         }
 
-        // Determine which rep to use based on ritual
-        RitualType ritual = screen.getMenu().ritual();
-        double rep = (ritual == RitualType.ANGEL) ? repAngel : repDemon;
-
-        // Normalize to [-1..+1] if your max is 100; if server uses another max, clamp anyway.
-        // Current server config clamps at UpgradeServerConfig.repMax but we draw against 100 here per your spec.
-        double normalized = clamp(rep / 100.0, -1.0, 1.0);
+        // Normalize to [-1..+1] using the real repMax from server
+        double normalized = clamp(unified / (double)repMaxForView, -1.0, 1.0);
 
         // Compute center X of the pointer along the BAR
         double centerX = baseX + (BAR_W * (normalized + 1.0) / 2.0);
@@ -142,8 +132,8 @@ public final class ReputationBarView {
                     PTR_W, PTR_H); // exact pixels, no scaling
         }
 
-        LOG.debug("[RepBar] draw ritual={} rep={} (client) centerX={} ptrLeftX={} barBaseX={}",
-                ritual, rep, (int)Math.round(centerX), ptrLeftX, baseX);
+        LOG.debug("[RepBar] draw unified={} repMax={} normalized={} centerX={} ptrLeftX={} barBaseX={}",
+                unified, repMaxForView, normalized, (int)Math.round(centerX), ptrLeftX, baseX);
     }
 
     private static double clamp(double v, double lo, double hi) {

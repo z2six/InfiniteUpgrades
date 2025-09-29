@@ -1,5 +1,4 @@
 // File: src/main/java/org/z2six/infiniteuprades/world/menu/AngelDemonMenu.java
-
 package org.z2six.infiniteupgrades.world.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -43,9 +42,9 @@ import java.util.regex.Pattern;
  *  - RitualType.DEMON -> upgrade one random eligible attribute each success
  *
  * Reputation:
- *  - Applied as extra success chance bonus (server-authoritative).
- *  - Updated (+/-) on SUCCESS/FAIL attempts, with cross-coupling.
- *  - We now send a rep snapshot S2C after each actual attempt (resource consumed),
+ *  - Single unified scalar on the server; negative favors demon, positive favors angel.
+ *  - Bonus for an attempt is computed from the scalar in the ritual's perspective.
+ *  - We send a rep snapshot S2C after each actual attempt (resource consumed),
  *    so the client’s pointer updates immediately.
  *
  * Slot anchors are based on the **main.png** coordinates you provided.
@@ -249,18 +248,17 @@ public class AngelDemonMenu extends AbstractContainerMenu {
 
             // Base chance from SERVER model
             double baseChance = UpgradeService.getSuccessChance(cur);
-            // Reputation bonus (server-authoritative)
+            // Reputation bonus (server-authoritative) from unified scalar & ritual perspective
             double bonus = Reputation.computeBonusFor(player, ritual);
             double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
 
             boolean success = player.getRandom().nextDouble() < finalChance;
 
-            // ---- This is the exact point the attempt "starts" (we consume the resource) ----
-            // Consume one resource on attempt
+            // ---- Attempt starts: consume the resource ----
             res.shrink(1);
             baseInv.setItem(1, res);
 
-            // Reputation deltas (attempt-based)
+            // Reputation delta on attempt
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 Reputation.applyAttemptDelta(sp, ritual, success);
                 // Send a fresh snapshot to the client (so the pointer moves immediately)

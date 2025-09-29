@@ -1,5 +1,4 @@
 // File: src/main/java/org/z2six/infiniteupgrades/network/ModNet.java
-
 package org.z2six.infiniteupgrades.network;
 
 import com.mojang.logging.LogUtils;
@@ -12,8 +11,8 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
+import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.Reputation;
-import org.z2six.infiniteupgrades.logic.RitualType;
 
 /**
  * Network registration + helpers for reputation sync.
@@ -34,9 +33,9 @@ public final class ModNet {
             if (!(p instanceof ServerPlayer sp)) {
                 return;
             }
-            double a = Reputation.get(sp, RitualType.ANGEL);
-            double d = Reputation.get(sp, RitualType.DEMON);
-            PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(a, d));
+            double unified = Reputation.get(sp);
+            int repMax = Math.max(1, UpgradeServerConfig.snapshot().repMax);
+            PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(unified, repMax));
         });
 
         // Server -> Client: deliver snapshot
@@ -45,8 +44,8 @@ public final class ModNet {
                 try {
                     var mc = Minecraft.getInstance();
                     if (mc != null && mc.screen instanceof AngelDemonScreen sc) {
-                        LOG.debug("[ModNet] S2C rep snapshot: angel={} demon={}", payload.angel(), payload.demon());
-                        sc.acceptRepSnapshot(payload.angel(), payload.demon());
+                        LOG.debug("[ModNet] S2C rep snapshot: unified={} repMax={}", payload.unified(), payload.repMax());
+                        sc.acceptRepSnapshot(payload.unified(), payload.repMax());
                     }
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply rep snapshot on client", t);
@@ -69,9 +68,9 @@ public final class ModNet {
     /** Server call: push a fresh snapshot to a specific player. */
     public static void sendRepSnapshotTo(ServerPlayer sp) {
         try {
-            double a = Reputation.get(sp, RitualType.ANGEL);
-            double d = Reputation.get(sp, RitualType.DEMON);
-            PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(a, d));
+            double unified = Reputation.get(sp);
+            int repMax = Math.max(1, UpgradeServerConfig.snapshot().repMax);
+            PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(unified, repMax));
         } catch (Throwable t) {
             LOG.error("[ModNet] Failed to send RepSnapshotS2C to {}", sp, t);
         }

@@ -96,9 +96,11 @@ public class Infiniteupgrades {
         // Register GAME-bus listeners programmatically (Bus.GAME is deprecated)
         try {
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.logic.RepEvents::onPlayerClone);
-            LOGGER.debug("[Infiniteupgrades] Registered RepEvents.onPlayerClone on NeoForge.EVENT_BUS");
+            // NEW: register admin commands (requires OP >= 3)
+            NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.commands.RepCommands::register);
+            LOGGER.debug("[Infiniteupgrades] Registered RepEvents & RepCommands on NeoForge.EVENT_BUS");
         } catch (Throwable t) {
-            LOGGER.error("[Infiniteupgrades] Failed to register RepEvents listener", t);
+            LOGGER.error("[Infiniteupgrades] Failed to register listeners", t);
         }
 
         // Existing COMMON config (your original)

@@ -1,5 +1,4 @@
 // File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelDemonScreen.java
-
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
@@ -120,7 +119,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
         // 1px gap above main; include the same DRAW_FUDGE_Y used by views for visual alignment
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
-        // UPDATED: pass texture locations explicitly (new ReputationBarView ctor)
         repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
 
         // Add & init subview widgets
@@ -131,10 +129,9 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     }
 
     /** Called from ModNet client handler on S2C snapshot arrival. */
-    public void acceptRepSnapshot(double angel, double demon) {
+    public void acceptRepSnapshot(double unified, int repMax) {
         if (repView != null) {
-            // UPDATED: method name changed in ReputationBarView
-            repView.acceptServerValues(angel, demon);
+            repView.acceptServerValues(unified, repMax);
         }
     }
 
