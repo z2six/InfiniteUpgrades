@@ -30,6 +30,9 @@ public final class ReputationConfigSpec {
     public final ModConfigSpec.DoubleValue repBonusPerPoint;
     public final ModConfigSpec.DoubleValue repBonusClamp;
 
+    /** NEW: Scale factor applied to the *opposite-side* penalty (0..1). Example: 0.5 ⇒ half malus. */
+    public final ModConfigSpec.DoubleValue oppositePenaltyFactor;
+
     private ReputationConfigSpec(ModConfigSpec.Builder B) {
         B.push("reputation");
 
@@ -100,6 +103,11 @@ public final class ReputationConfigSpec {
                 "   even if 'max' and 'bonusPerPoint' would otherwise produce a larger value."
         ).defineInRange("bonusClamp", 0.20, 0.0, 1.0);
 
+        oppositePenaltyFactor = B.comment(
+                "Scale applied to the *penalty* when you infuse with the OPPOSITE faction.",
+                "Example: 0.5 means if Demon side would be +20%, Angel will be -10%."
+        ).defineInRange("oppositePenaltyFactor", 0.5, 0.0, 1.0);
+
         B.pop();
     }
 
@@ -113,13 +121,17 @@ public final class ReputationConfigSpec {
         public final double repDeltaFail;
         public final double repBonusPerPoint;
         public final double repBonusClamp;
+        /** NEW: 0..1 multiplier for opposite-side malus. */
+        public final double oppositePenaltyFactor;
 
-        public Snapshot(int repMax, double repSucc, double repFail, double bonusPerPoint, double bonusClamp) {
+        public Snapshot(int repMax, double repSucc, double repFail, double bonusPerPoint, double bonusClamp,
+                        double oppositePenaltyFactor) {
             this.repMax = repMax;
             this.repDeltaSuccess = repSucc;
             this.repDeltaFail = repFail;
             this.repBonusPerPoint = bonusPerPoint;
             this.repBonusClamp = bonusClamp;
+            this.oppositePenaltyFactor = Math.max(0.0, Math.min(1.0, oppositePenaltyFactor));
         }
     }
 
@@ -129,7 +141,8 @@ public final class ReputationConfigSpec {
                 repDeltaSuccess.get(),
                 repDeltaFail.get(),
                 repBonusPerPoint.get(),
-                clamp01(repBonusClamp.get())
+                clamp01(repBonusClamp.get()),
+                clamp01(oppositePenaltyFactor.get())
         );
     }
 }

@@ -44,7 +44,7 @@ public final class ProgressFillView {
 
     // Phase tuning
     private static final double BREATH_FRACTION = 0.10;     // 10% of total time for breathing pulse
-    private static final double REVERSE_TO_FILL_RATIO = 0.5;// reverse is 50% as long as fill
+    private static final double REVERSE_TO_FILL_RATIO = 0.25;// reverse is 50% as long as fill
     private static final int    BREATH_PULSES = 2;          // number of pulse cycles during breathe
 
     private final AngelDemonScreen screen;

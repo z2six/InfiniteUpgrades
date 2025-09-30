@@ -336,7 +336,39 @@ public final class UpgradeService {
         }
         copy.set(DataComponents.ATTRIBUTE_MODIFIERS, b.build());
 
-        // Update level suffix only (audit unknown; do not mutate totals without history)
+        // --- NEW: write a compact failure audit entry and update level ---
+        try {
+            CustomData cd = copy.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+            CustomData updated = cd.update(tag -> {
+                CompoundTag r = tag.getCompound("iu_upgrade");
+
+                // Update level to the downgraded value even without detailed per-attr history
+                r.putInt("level", Math.max(0, newLevel));
+
+                // Append a minimal event so UIs can show a failure in the timeline.
+                // No 'attribute' key => client tooltip math ignores this entry.
+                ListTag history = r.getList("history", Tag.TAG_COMPOUND);
+                CompoundTag ev = new CompoundTag();
+                ev.putLong("time", System.currentTimeMillis());
+                ev.putInt("levelBefore", Math.max(0, newLevel + 1));
+                ev.putInt("levelAfter", Math.max(0, newLevel));
+                ev.putString("op", "NONE");
+                ev.putDouble("old", 0.0);
+                ev.putDouble("delta", 0.0);
+                ev.putDouble("new", 0.0);
+                ev.putDouble("stepPercent", 0.0);
+                ev.putString("ruleId", "downgrade_fallback"); // signals a fail without granular history
+                history.add(ev);
+
+                r.put("history", history);
+                tag.put("iu_upgrade", r);
+            });
+            copy.set(DataComponents.CUSTOM_DATA, updated);
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] fallbackProportionalRollback: audit write failed: {}", t.toString());
+        }
+
+        // Update level suffix
         applyColoredSuffix(copy, Math.max(0, newLevel));
         return copy;
     }
