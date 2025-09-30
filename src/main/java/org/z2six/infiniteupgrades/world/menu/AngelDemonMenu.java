@@ -116,9 +116,10 @@ public class AngelDemonMenu extends AbstractContainerMenu {
     private long pendingEndGameTime = -1L;           // server: level.getGameTime() tick to finalize
     private boolean pendingSuccess = false;          // precomputed outcome at attempt start
     private ItemStack pendingUpgraded = ItemStack.EMPTY; // precomputed upgraded result (if success)
+    private ItemStack pendingOriginal = ItemStack.EMPTY; // snapshot of the original input (for restore on fail)
 
     // ---- Client-side convenience (for step 2 UI lock/anim) ----
-    private long clientLockEndGameTime = -1L; // received via S2C; step 2 will read this for animation
+    private long clientLockEndGameTime = -1L; // received via S2C; UI reads this for animation/lock
     private int clientLockDurationTicks = 0;
 
     public AngelDemonMenu(int id, Inventory inv) {
@@ -126,10 +127,24 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         try {
             // Inputs
             this.addSlot(new Slot(baseInv, 0, INPUT1_X, INPUT1_Y) {
-                @Override public boolean mayPlace(ItemStack stack) { return isCombatItem(stack); }
+                @Override public boolean mayPlace(ItemStack stack) {
+                    // Disallow placing while an infusion is pending
+                    return !AngelDemonMenu.this.pendingActive && isCombatItem(stack);
+                }
+                @Override public boolean mayPickup(Player player) {
+                    // Disallow removing while an infusion is pending
+                    if (AngelDemonMenu.this.pendingActive) return false;
+                    return super.mayPickup(player);
+                }
             });
             this.addSlot(new Slot(baseInv, 1, INPUT2_X, INPUT2_Y) {
-                @Override public boolean mayPlace(ItemStack stack) { return stack.is(Items.IRON_INGOT); }
+                @Override public boolean mayPlace(ItemStack stack) {
+                    return !AngelDemonMenu.this.pendingActive && stack.is(Items.IRON_INGOT);
+                }
+                @Override public boolean mayPickup(Player player) {
+                    if (AngelDemonMenu.this.pendingActive) return false;
+                    return super.mayPickup(player);
+                }
             });
 
             // Output (preview/result)
@@ -259,6 +274,9 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 return;
             }
 
+            // Snapshot the original input for restoration on failure, and to remove from player access
+            ItemStack originalCopy = in.copy();
+
             int cur = parseBaseNameAndLevel(in.getHoverName()).getSecond();
 
             // Base chance from SERVER model (+ reputation bonus)
@@ -271,6 +289,11 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             res.shrink(1);
             baseInv.setItem(1, res);
 
+            // Remove the original input from access immediately to prevent duplication exploits.
+            // Keep a server-side snapshot in pendingOriginal to restore on fail.
+            pendingOriginal = originalCopy;
+            withPreviewSuppressed(() -> baseInv.setItem(0, ItemStack.EMPTY));
+
             // Reputation delta on attempt
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 Reputation.applyAttemptDelta(sp, ritual, success);
@@ -280,10 +303,10 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 LOG.warn("[AngelDemonMenu] applyAttemptDelta skipped: not a ServerPlayer");
             }
 
-            // Precompute upgraded result if success
+            // Precompute upgraded result if success (use original snapshot)
             ItemStack upgradedIfSuccess = ItemStack.EMPTY;
             if (success) {
-                UpgradeService.Result r = UpgradeService.tryUpgradeWithRitual(in, player.getRandom(), ritual);
+                UpgradeService.Result r = UpgradeService.tryUpgradeWithRitual(originalCopy, player.getRandom(), ritual);
                 upgradedIfSuccess = r.upgraded();
                 clearPreviewTags(upgradedIfSuccess); // ensure not marked as preview
             }
@@ -297,6 +320,12 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             if (delayTicks <= 0) {
                 // Finalize immediately (no timer)
                 finalizePendingInternal(player, success, upgradedIfSuccess);
+                // Clear any pending bookkeeping since we finalized synchronously
+                this.pendingActive = false;
+                this.pendingEndGameTime = -1L;
+                this.pendingSuccess = false;
+                this.pendingUpgraded = ItemStack.EMPTY;
+                this.pendingOriginal = ItemStack.EMPTY;
             } else {
                 // Arm pending
                 this.pendingActive = true;
@@ -304,12 +333,12 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 this.pendingUpgraded = upgradedIfSuccess;
                 this.pendingEndGameTime = now + delayTicks;
 
-                // Notify client (step 2 will use this to lock/animate)
+                // Notify client (UI lock/anim will respond)
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                     ModNet.sendInfuseStartedTo(sp, this.containerId, this.pendingEndGameTime, delayTicks);
                 }
 
-                // Resource change + any client sync
+                // Resource & slot changes sync
                 syncToClient("infuse attempt armed");
             }
         } catch (Throwable t) {
@@ -333,6 +362,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         this.pendingEndGameTime = -1L;
         this.pendingSuccess = false;
         this.pendingUpgraded = ItemStack.EMPTY;
+        this.pendingOriginal = ItemStack.EMPTY;
     }
 
     private void finalizePendingInternal(Player player, boolean success, ItemStack upgradedIfSuccess) {
@@ -340,18 +370,23 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             if (success) {
                 LOG.info("[AngelDemonMenu] Infuse SUCCESS finalize (ritual={})", ritual);
                 withPreviewSuppressed(() -> {
-                    baseInv.setItem(0, ItemStack.EMPTY);          // consume input
+                    // Input was already removed at attempt start
                     baseInv.setItem(2, upgradedIfSuccess);        // real result into output
                 });
             } else {
                 LOG.info("[AngelDemonMenu] Infuse FAIL finalize (ritual={})", ritual);
-                // Keep input in slot 0; nothing to place in slot 2 (keep any existing ghost preview)
+                // Restore the original input stack on failure (since we removed it at start)
+                if (!pendingOriginal.isEmpty()) {
+                    ItemStack restore = pendingOriginal;
+                    pendingOriginal = ItemStack.EMPTY;
+                    withPreviewSuppressed(() -> baseInv.setItem(0, restore));
+                }
                 updatePreview();
             }
 
             syncToClient("infuse finalize");
 
-            // Notify client: result ready (for step 2 to unlock/animate)
+            // Notify client: result ready (unlock UI etc.)
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 ModNet.sendInfuseResultTo(sp, this.containerId, success);
             }
@@ -379,7 +414,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 return copy;
             }
 
-            // Disallow mass-moving while a server attempt is pending (defensive)
+            // Disallow any mass-moving while a server attempt is pending (defensive)
             if (pendingActive) return ItemStack.EMPTY;
 
             ItemStack stack = slot.getItem();
@@ -422,6 +457,18 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         }
 
         try {
+            // If a pending infusion exists, finalize it NOW to avoid dupes/cancellation exploits.
+            if (player != null && !player.level().isClientSide && pendingActive) {
+                LOG.debug("[AngelDemonMenu] removed() with pending infusion -> finalize immediately");
+                finalizePendingInternal(player, pendingSuccess, pendingUpgraded);
+                // Clear pending flags after finalize
+                this.pendingActive = false;
+                this.pendingEndGameTime = -1L;
+                this.pendingSuccess = false;
+                this.pendingUpgraded = ItemStack.EMPTY;
+                this.pendingOriginal = ItemStack.EMPTY;
+            }
+
             // If slot 2 holds a GHOST preview, ensure it isn't returned.
             ItemStack out = baseInv.getItem(2);
             if (isPreview(out)) {
@@ -444,6 +491,15 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             // If we’re currently showing a REAL result, do not clobber it with a ghost
             if (hasRealResult()) {
                 LOG.debug("[AngelDemonMenu] updatePreview skipped (real result present)");
+                return;
+            }
+
+            // While an infusion is pending, do not show a ghost preview (inputs are locked/empty)
+            if (pendingActive) {
+                withPreviewSuppressed(() -> {
+                    baseInv.setItem(2, ItemStack.EMPTY);
+                    previewChancePermille = 0;
+                });
                 return;
             }
 
@@ -657,7 +713,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         return s;
     }
 
-    // ---------- Client helper hooks (used by S2C; step 2 UI will read these) ----------
+    // ---------- Client helper hooks (used by S2C; UI reads these) ----------
 
     public void clientOnInfuseStarted(long endGameTime, int durationTicks) {
         this.clientLockEndGameTime = endGameTime;
@@ -667,7 +723,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
     public void clientOnInfuseResult(boolean success) {
         this.clientLockEndGameTime = -1L;
         this.clientLockDurationTicks = 0;
-        // no further action here (server already synced slots); step 2 will update visuals
+        // no further action here (server already synced slots)
     }
 
     public long getClientLockEndGameTime() { return clientLockEndGameTime; }

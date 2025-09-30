@@ -133,7 +133,7 @@ public final class ReputationBarView {
         }
 
         // LOG.debug("[RepBar] draw unified={} repMax={} normalized={} centerX={} ptrLeftX={} barBaseX={}",
-                unified, repMaxForView, normalized, (int)Math.round(centerX), ptrLeftX, baseX);
+                // unified, repMaxForView, normalized, (int)Math.round(centerX), ptrLeftX, baseX);
     }
 
     private static double clamp(double v, double lo, double hi) {
