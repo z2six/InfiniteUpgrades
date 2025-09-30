@@ -1,5 +1,4 @@
 // File: src/main/java/org/z2six/infiniteupgrades/client/widget/TriStateImageButton.java
-
 package org.z2six.infiniteupgrades.client.widget;
 
 import net.minecraft.client.gui.GuiGraphics;
@@ -59,7 +58,9 @@ public final class TriStateImageButton extends AbstractWidget {
     /** Lock the button for N ticks (client-side). */
     public void lockForTicks(int ticks) {
         this.locked = true;
-        this.lockTicksRemaining = Math.max(this.lockTicksRemaining, Math.max(0, ticks));
+        // ensure we never shorten an existing lock if this is called repeatedly
+        int add = Math.max(0, ticks);
+        this.lockTicksRemaining = Math.max(this.lockTicksRemaining, add);
         this.active = false; // built-in input gate
     }
 

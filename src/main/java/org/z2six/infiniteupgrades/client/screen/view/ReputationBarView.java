@@ -132,7 +132,7 @@ public final class ReputationBarView {
                     PTR_W, PTR_H); // exact pixels, no scaling
         }
 
-        LOG.debug("[RepBar] draw unified={} repMax={} normalized={} centerX={} ptrLeftX={} barBaseX={}",
+        // LOG.debug("[RepBar] draw unified={} repMax={} normalized={} centerX={} ptrLeftX={} barBaseX={}",
                 unified, repMaxForView, normalized, (int)Math.round(centerX), ptrLeftX, baseX);
     }
 

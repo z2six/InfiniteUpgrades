@@ -1,10 +1,10 @@
 // File: src/main/java/org/z2six/infiniteupgrades/client/screen/view/MainGuiView.java
-
 package org.z2six.infiniteupgrades.client.screen.view;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
@@ -42,6 +42,10 @@ public final class MainGuiView {
 
     private final AngelDemonScreen screen;
     private TriStateImageButton infuseBtn;
+
+    // Tracks the last server-reported infusion end tick we've applied on the client.
+    // Prevents re-applying the same lock every tick.
+    private long observedLockEndGameTime = -1L;
 
     public MainGuiView(AngelDemonScreen screen) {
         this.screen = screen;
@@ -92,13 +96,12 @@ public final class MainGuiView {
                 () -> {
                     try {
                         if (screen.getMinecraft() != null && screen.getMinecraft().gameMode != null) {
-                            // Send server-side menu button click
+                            // Send server-side menu button click (server will respond with S2C start/result)
                             screen.getMinecraft().gameMode.handleInventoryButtonClick(
                                     screen.getMenu().containerId,
                                     AngelDemonMenu.BUTTON_INFUSE
                             );
-                            // Client lock for ~3s (placeholder; server-authoritative pipeline comes later)
-                            infuseBtn.lockForSeconds(3);
+                            // NOTE: no local placeholder lock here — we now wait for InfuseStartedS2C.
                         }
                     } catch (Throwable t) {
                         LOG.error("[MainGuiView] Infuse onPress failed", t);
@@ -106,12 +109,19 @@ public final class MainGuiView {
                 }
         );
 
-        // Use the screen's public helper to add widgets
+        // Add widget
         screen.addToScreen(infuseBtn);
+
+        // If a lock was already in progress before this screen opened, honor it now based on menu values.
+        applyServerLockIfAny(true);
     }
 
     /** Called each container tick from the parent screen. */
     public void tick() {
+        // First, honor any new server-authoritative locks that arrived since the last tick.
+        applyServerLockIfAny(false);
+
+        // Then, tick down the local lock timer for the button (it auto-unlocks at 0).
         if (infuseBtn != null) {
             infuseBtn.clientTickLock();
         }
@@ -125,5 +135,48 @@ public final class MainGuiView {
                 0, 0,
                 MAIN_W, MAIN_H,
                 MAIN_W, MAIN_H); // srcW/srcH == dstW/dstH; exact pixel copy (no scaling)
+    }
+
+    /**
+     * Applies any pending server lock to the button.
+     * - On init: tries to compute remaining ticks using client world gameTime, so we don't "reset" a mid-run lock.
+     * - On ticks: only applies when server reports a new endGameTime we haven't seen yet.
+     */
+    private void applyServerLockIfAny(boolean onInit) {
+        if (infuseBtn == null) return;
+
+        AngelDemonMenu menu = screen.getMenu();
+        if (menu == null) return;
+
+        long end = menu.getClientLockEndGameTime();
+        int totalTicks = menu.getClientLockDurationTicks();
+
+        if (end <= 0L || totalTicks <= 0) return;
+
+        if (onInit) {
+            // Screen just opened; we may be mid-lock. Estimate remaining time using client gameTime.
+            int remaining = totalTicks;
+            try {
+                Minecraft mc = screen.getMinecraft();
+                ClientLevel level = (mc != null) ? mc.level : null;
+                long clientNow = (level != null) ? level.getGameTime() : 0L;
+                long diff = end - clientNow; // may be negative if nearly done
+                if (diff < 0L) diff = 0L;
+                if (diff > Integer.MAX_VALUE) diff = Integer.MAX_VALUE;
+                remaining = Math.min(totalTicks, (int) diff);
+            } catch (Throwable ignore) {}
+
+            if (remaining > 0) {
+                infuseBtn.lockForTicks(remaining);
+                observedLockEndGameTime = end;
+            }
+            return;
+        }
+
+        // Regular ticks: if server reports a new end tick, start/restart the lock for the full duration.
+        if (end != observedLockEndGameTime) {
+            infuseBtn.lockForTicks(totalTicks);
+            observedLockEndGameTime = end;
+        }
     }
 }
