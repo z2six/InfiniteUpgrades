@@ -7,15 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Server-authoritative "tuning" values that used to live in COMMON.
- * We only keep the parts that affect *preview math* on the client:
- *  - stepPercent
- *  - bonusSteps (level -> extra percent for that increment)
- *
- * All chance knobs (startChance, decrement, min, overrides) now live in the Chance section.
- * maxLevel lives in the General section.
- */
+
 public final class TuningConfigSpec {
 
     public final ModConfigSpec.DoubleValue stepPercent;
@@ -25,7 +17,7 @@ public final class TuningConfigSpec {
         B.push("tuning");
 
         stepPercent = B.comment("Attribute bonus per level (fraction). Example: 0.05 = +5% per level.")
-                .defineInRange("stepPercent", 0.05, 0.0, 10.0);
+                .defineInRange("stepPercent", 0.01, 0.0, 10.0);
 
         bonusStepsKV = B.comment("Tier bumps. Format: \"level=bonusPercent\". Example: [\"5=0.10\",\"10=0.10\"].")
                 .defineListAllowEmpty("bonusSteps", List.of(), o -> o instanceof String);

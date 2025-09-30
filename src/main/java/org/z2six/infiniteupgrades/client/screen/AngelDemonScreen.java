@@ -30,29 +30,23 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Angel/Demon GUI screen split into sub-views:
- *  - MainGuiView       (main panel + infuse button)
- *  - DetailsPanelView  (scrolling details panel on the right)
- *  - ReputationBarView (bar above the main panel)
- *
- * Group centering: (Main + 1px + Details) are centered as one unit.
- * Reputation bar sits above main and does not push the group downward.
+ * Angel/Demon GUI screen split into sub-views.
  */
 public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // Group dimensions: group = main(176) + 1 + details(128) = 305 width, height = 222 (max of both)
+    // Group dimensions: main(176) + 1 + details(128) = 305 width, height = 222
     private static final int GROUP_W = MainGuiView.MAIN_W + MainGuiView.GAP_TO_DETAILS + DetailsPanelView.DETAILS_W;
     private static final int GROUP_H = 222;
 
-    // Rep bar dims (drawn above the main panel)
+    // Rep bar dims
     private static final int REP_W = 96;
     private static final int REP_H = 11;
 
     // Fudge used by subviews (keep here as well for computing rep bar vertical anchor)
     private static final int DRAW_FUDGE_Y = -1;
 
-    // Tooltip helpers (obfuscate preview numeric parts)
+    // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
 
@@ -60,6 +54,15 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private DetailsPanelView detailsView;
     private ReputationBarView repView;
     private ProgressFillView progressView;
+
+    // Latest reputation snapshot from server (for client-side chance preview text)
+    private double repUnified = 0.0;
+    private int repMax = 100;
+
+    // Slot change detection (robust across mappings)
+    private ItemStack prev0 = ItemStack.EMPTY;
+    private ItemStack prev1 = ItemStack.EMPTY;
+    private ItemStack prev2 = ItemStack.EMPTY;
 
     public AngelDemonScreen(AngelDemonMenu menu, Inventory inv, Component title) {
         super(menu, inv, Component.empty());
@@ -98,6 +101,10 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/pointer.png");
     }
 
+    // Expose latest rep snapshot for DetailsPanelView (for chance preview)
+    public double getRepUnified() { return repUnified; }
+    public int getRepMax() { return repMax; }
+
     // --- Lifecycle ---
 
     @Override
@@ -110,29 +117,66 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         detailsView = new DetailsPanelView(this);
         progressView = new ProgressFillView(this);
 
-        // Rep bar anchor above the main panel
+        // Rep bar anchor...
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
         repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
 
-        // Add & init subview widgets (buttons live in mainView)
+        // Add & init subview widgets
         mainView.onInit();
 
         // Ask the server for the current reputation snapshot
         ModNet.requestRepSnapshot();
+
+        // Ensure details starts fresh
+        if (detailsView != null) detailsView.markDirty();
+
+        // Prime slot snapshots
+        snapshotSlots();
     }
 
     /** Called from ModNet client handler on S2C snapshot arrival. */
     public void acceptRepSnapshot(double unified, int repMax) {
+        this.repUnified = unified;
+        this.repMax = Math.max(1, repMax);
         if (repView != null) {
-            repView.acceptServerValues(unified, repMax);
+            repView.acceptServerValues(unified, this.repMax);
         }
+        if (detailsView != null) detailsView.markDirty();
     }
 
     @Override
     protected void containerTick() {
         super.containerTick();
         if (mainView != null) mainView.tick();
+
+        // Poll the three top slots; mark details dirty if any changed.
+        boolean changed = false;
+        ItemStack s0 = safeStack(0);
+        ItemStack s1 = safeStack(1);
+        ItemStack s2 = safeStack(2);
+
+        if (!ItemStack.matches(s0, prev0)) { changed = true; prev0 = s0.copy(); }
+        if (!ItemStack.matches(s1, prev1)) { changed = true; prev1 = s1.copy(); }
+        if (!ItemStack.matches(s2, prev2)) { changed = true; prev2 = s2.copy(); }
+
+        if (changed && detailsView != null) {
+            detailsView.markDirty();
+        }
+    }
+
+    private void snapshotSlots() {
+        prev0 = safeStack(0).copy();
+        prev1 = safeStack(1).copy();
+        prev2 = safeStack(2).copy();
+    }
+
+    private ItemStack safeStack(int idx) {
+        try {
+            return this.menu.getSlot(idx).getItem();
+        } catch (Throwable t) {
+            return ItemStack.EMPTY;
+        }
     }
 
     @Override
@@ -160,11 +204,13 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Draw reputation overlay after the base UI so it's on top
         if (repView != null) repView.render(gg);
 
+        if (detailsView != null) detailsView.renderOverlay(gg, mouseX, mouseY);
+
         if (interceptPreview && hoveredBefore != null && hoveredBefore.hasItem()) {
             // Custom tooltip for PREVIEW items: obfuscate numeric parts to avoid spoilers.
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
-            List<Component> modified = obfuscateNumericPartsInCombatLines(vanilla);
+            List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
             List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
                     .map(Component::getVisualOrderText)
                     .toList();
@@ -178,7 +224,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
         if (mainView != null) mainView.renderBg(gg);
-        if (progressView != null) progressView.renderBg(gg); // animation overlay
+        if (progressView != null) progressView.renderBg(gg); // draw animation overlay
         if (detailsView != null) detailsView.renderBg(gg);
     }
 
@@ -187,22 +233,43 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // no vanilla labels
     }
 
-    // --- Input: wheel / trackpad scroll routed to details panel only ---
+    // --- Mouse handling (1.21.x uses 4-arg mouseScrolled) ---
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
-        // Prefer vertical; if a device only sends horizontal, use that.
-        double delta = (deltaY != 0.0) ? deltaY : deltaX;
-
-        if (detailsView != null && detailsView.handleScroll(mouseX, mouseY, delta)) {
-            return true; // consumed by details panel
+        if (detailsView != null && detailsView.mouseScrolled(mouseX, mouseY, deltaY)) {
+            return true;
         }
         return super.mouseScrolled(mouseX, mouseY, deltaX, deltaY);
     }
 
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (detailsView != null && detailsView.mouseClicked(mouseX, mouseY, button)) {
+            return true;
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (detailsView != null && detailsView.mouseDragged(mouseX, mouseY, button, dragX, dragY)) {
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (detailsView != null && detailsView.mouseReleased(mouseX, mouseY, button)) {
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
     // ---------------- Tooltip helpers (preview obfuscation) ----------------
 
-    private List<Component> obfuscateNumericPartsInCombatLines(List<Component> vanilla) {
+    private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
         List<Component> out = new ArrayList<>(vanilla.size());
         for (Component c : vanilla) {
             String raw = c.getString();

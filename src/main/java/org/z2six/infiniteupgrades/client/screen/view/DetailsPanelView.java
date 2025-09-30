@@ -4,48 +4,31 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
-import org.jetbrains.annotations.Nullable;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
+import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
+import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.Registries;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
-import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
+import org.z2six.infiniteupgrades.logic.RitualType;
+import org.z2six.infiniteupgrades.logic.UpgradeService;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
-import static org.z2six.infiniteupgrades.client.screen.view.MainGuiView.MAIN_W;
-import static org.z2six.infiniteupgrades.client.screen.view.MainGuiView.mainDrawDx;
-import static org.z2six.infiniteupgrades.client.screen.view.MainGuiView.mainDrawDy;
+import java.text.DecimalFormat;
+import java.util.*;
 
 /**
  * Details panel drawn to the right of the main panel.
- *
- * Texture:
- *  - Size: 128x222 (exact texture).
- *  - 1px gap from the main panel.
- *
- * Text area (relative to this panel texture):
- *  - From X=11,Y=20 to X=113,Y=212
- *
- * Scroll bar assets (independent textures):
- *  - holder: 3x193 placed with top-left at X=116,Y=20 (relative to panel)
- *  - scroller: 5x24; top-most top-left is X=115,Y=20; bottom-most top-left is X=119,Y=189
- *
- * Scrolling:
- *  - Consumes wheel/trackpad when cursor is inside the text area OR on the scrollbar area.
- *  - We render a minimal custom scrollbar now; later you can add dragging, arrows, etc.
  */
 public final class DetailsPanelView {
     private static final Logger LOG = LogUtils.getLogger();
@@ -56,47 +39,57 @@ public final class DetailsPanelView {
     // 1px gap between main and details
     public static final int GAP_TO_MAIN = 1;
 
-    // Text area (within details.png)
-    private static final int TEXT_X0 = 11;
-    private static final int TEXT_Y0 = 20;
-    private static final int TEXT_X1 = 113;
-    private static final int TEXT_Y1 = 212;
+    // Inner text box (relative to details origin)
+    private static final int TEXT_INSET_LEFT = 11;
+    private static final int TEXT_INSET_TOP  = 20;
+    private static final int TEXT_INSET_RIGHT = 113;
+    private static final int TEXT_INSET_BOTTOM = 212;
 
-    // Scroll holder area (within details.png)
-    private static final int HOLDER_X = 116;   // width 3
+    // Scroll holder + scroller geometry (relative to details origin)
+    private static final int HOLDER_X = 116;
     private static final int HOLDER_Y = 20;
     private static final int HOLDER_W = 3;
     private static final int HOLDER_H = 193;
 
-    // Scroller sprite (within its own texture)
     private static final int SCROLLER_W = 5;
     private static final int SCROLLER_H = 24;
-
-    // Scroller motion range (panel-space), top and bottom top-left anchors
-    private static final int SCROLLER_TOP_X = 115;
+    private static final int SCROLLER_X = 115; // fixed—do NOT vary with drag (prevents drifting)
     private static final int SCROLLER_TOP_Y = 20;
-    private static final int SCROLLER_BOT_X = 119;
-    private static final int SCROLLER_BOT_Y = 189;
+    private static final int SCROLLER_BOTTOM_Y = 189; // top-left at lowest point
+
+    // Scroll constants
+    private static final double WHEEL_LINES = 5.0;  // logical lines per wheel step
+    private static final int LINE_SPACING = 2;
 
     private final AngelDemonScreen screen;
 
-    // Render cache
-    private final List<Line> lines = new ArrayList<>();
+    // Cached layout
+    private int detailsOriginX;
+    private int detailsOriginY;
 
-    // Scrolling state (pixels)
-    private int scrollOffsetPx = 0;
-    private int contentHeightPx = 0;
-    private int maxScrollPx = 0;
+    // Scroll state
+    private double contentHeight = 0.0;
+    private double scrollOffset = 0.0;   // pixels
+    private boolean dirty = true;
 
-    // Rebuild guard
-    private @Nullable ItemStack lastSeenStack = ItemStack.EMPTY;
-    private int lastSeenPreviewPermille = -1;
+    // Drag state
+    private boolean draggingScroller = false;
+    private int dragYOffset = 0; // mouseY - scrollerTopY at click time
+
+    // Built text buffer
+    private final List<Row> rows = new ArrayList<>();
+
+    // Bullet glyph (compact, readable)
+    private static final String BULLET = "▸ ";
+
+    private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
+    private static final DecimalFormat PCT0 = new DecimalFormat("0");
 
     public DetailsPanelView(AngelDemonScreen screen) {
         this.screen = screen;
     }
 
-    // ----------- Textures -----------
+    // -------------- Resources ----------------
 
     private ResourceLocation detailsTex() {
         // textures/gui/container/{angel|demon}/details.png
@@ -106,398 +99,533 @@ public final class DetailsPanelView {
         );
     }
 
-    // Put your scrollbar textures here (shared by both rituals)
-    private ResourceLocation scrollerHolderTex() {
-        // textures/gui/container/common/scroller_holder.png
+    private ResourceLocation holderTex() {
+        // textures/gui/container/{angel|demon}/scroller_holder.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
-                "textures/gui/container/common/scroller_holder.png"
-        );
-    }
-    private ResourceLocation scrollerTex() {
-        // textures/gui/container/common/scroller.png
-        return ResourceLocation.fromNamespaceAndPath(
-                "infiniteupgrades",
-                "textures/gui/container/common/scroller.png"
+                "textures/gui/container/" + screen.folder() + "/scroller_holder.png"
         );
     }
 
-    // ----------- Rendering -----------
+    private ResourceLocation scrollerTex() {
+        // textures/gui/container/{angel|demon}/scroller.png
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/" + screen.folder() + "/scroller.png"
+        );
+    }
+
+    // -------------- Public hooks ----------------
+
+    /** Mark contents dirty so they’ll rebuild next frame. */
+    public void markDirty() { this.dirty = true; }
+
+    // -------------- Rendering ----------------
 
     public void renderBg(GuiGraphics gg) {
-        // Panel top-left in screen space
-        int px = panelLeft();
-        int py = panelTop();
+        // Compute details origin (to the right of MAIN)
+        detailsOriginX = screen.getLeftPos() + MainGuiView.mainDrawDx() + MainGuiView.MAIN_W + GAP_TO_MAIN;
+        detailsOriginY = screen.getTopPos()  + MainGuiView.mainDrawDy();
 
-        // Draw the details panel texture
-        gg.blit(detailsTex(), px, py, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
+        // Panel background
+        gg.blit(detailsTex(), detailsOriginX, detailsOriginY, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
 
-        // Build/refresh content (cheap) and compute scroll ranges
-        rebuildIfNeeded();
-
-        // Clip to the text area
-        int x0 = px + TEXT_X0;
-        int y0 = py + TEXT_Y0;
-        int textW = TEXT_X1 - TEXT_X0; // 113-11 = 102 px
-        int textH = TEXT_Y1 - TEXT_Y0; // 212-20 = 192 px
-
-        gg.enableScissor(x0, y0, x0 + textW, y0 + textH);
-        drawLines(gg, x0, y0, textW, textH);
-        gg.disableScissor();
-
-        // Draw the scroll holder
-        gg.blit(scrollerHolderTex(),
-                px + HOLDER_X, py + HOLDER_Y,
+        // Holder (fixed)
+        gg.blit(holderTex(),
+                detailsOriginX + HOLDER_X,
+                detailsOriginY + HOLDER_Y,
                 0, 0,
                 HOLDER_W, HOLDER_H,
                 HOLDER_W, HOLDER_H);
 
-        // Draw the scroller at a position interpolated by scroll fraction
-        double frac = (maxScrollPx <= 0) ? 0.0 : (scrollOffsetPx / (double) maxScrollPx);
-        frac = Mth.clamp(frac, 0.0, 1.0);
-
-        int scX = (int)Math.round(Mth.lerp(frac, SCROLLER_TOP_X, SCROLLER_BOT_X));
-        int scY = (int)Math.round(Mth.lerp(frac, SCROLLER_TOP_Y, SCROLLER_BOT_Y));
-
-        gg.blit(scrollerTex(),
-                px + scX, py + scY,
-                0, 0,
-                SCROLLER_W, SCROLLER_H,
-                SCROLLER_W, SCROLLER_H);
-    }
-
-    private void drawLines(GuiGraphics gg, int x0, int y0, int w, int h) {
-        Font font = screen.getMinecraft().font;
-        int lineH = font.lineHeight; // 9
-
-        // Total content height (already measured during build)
-        int yStart = y0 - scrollOffsetPx;
-
-        int y = yStart;
-        for (Line ln : lines) {
-            if (y + lineH < y0) { // above clip
-                y += lineH;
-                continue;
-            }
-            if (y > y0 + h - lineH) { // below clip
-                break;
-            }
-
-            int color = ln.dimmed ? 0xFF8A8A8A : 0xFFE0E0E0; // pleasant light gray/white
-            gg.drawString(font, ln.text, x0, y, color, false);
-            y += lineH;
+        // Build rows if needed
+        if (dirty) {
+            rebuildRows();
+            dirty = false;
         }
+
+        // Clip text to the text area
+        int clipX = detailsOriginX + TEXT_INSET_LEFT;
+        int clipY = detailsOriginY + TEXT_INSET_TOP;
+        int clipW = (TEXT_INSET_RIGHT - TEXT_INSET_LEFT);
+        int clipH = (TEXT_INSET_BOTTOM - TEXT_INSET_TOP);
+
+        gg.enableScissor(clipX, clipY, clipX + clipW, clipY + clipH);
+        drawRows(gg, clipX, clipY, clipW, clipH);
+        gg.disableScissor();
+
+        // Draw scroller knob AFTER text (on top)
+        int scrollerDrawX = detailsOriginX + SCROLLER_X;
+        int scrollerDrawY = detailsOriginY + currentScrollerTopY();
+        gg.blit(scrollerTex(), scrollerDrawX, scrollerDrawY, 0, 0, SCROLLER_W, SCROLLER_H, SCROLLER_W, SCROLLER_H);
     }
 
-    // ----------- Input (scroll) -----------
+    /** Overlay (optional). */
+    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) {
+        // no overlay for now
+    }
 
-    /**
-     * Handle wheel/trackpad scrolling; only consumes if mouse is inside the text area or scrollbar zone.
-     * @param mouseX screen-space
-     * @param mouseY screen-space
-     * @param delta positive = scroll up, negative = scroll down
-     * @return true if consumed
-     */
-    public boolean handleScroll(double mouseX, double mouseY, double delta) {
-        int px = panelLeft();
-        int py = panelTop();
+    // -------------- Input ----------------
 
-        int textX0 = px + TEXT_X0;
-        int textY0 = py + TEXT_Y0;
-        int textX1 = px + TEXT_X1;
-        int textY1 = py + TEXT_Y1;
-
-        int sbX0 = px + HOLDER_X - 2;     // allow a tiny grab margin
-        int sbY0 = py + HOLDER_Y;
-        int sbX1 = px + HOLDER_X + HOLDER_W + 4; // plus some margin to the right
-        int sbY1 = py + HOLDER_Y + HOLDER_H;
-
-        boolean inText = mouseX >= textX0 && mouseX <= textX1 && mouseY >= textY0 && mouseY <= textY1;
-        boolean inScroll = mouseX >= sbX0 && mouseX <= sbX1 && mouseY >= sbY0 && mouseY <= sbY1;
-
-        if (!inText && !inScroll) return false;
-
-        // Step per notch ~ 12px; invert sign so wheel up moves content up (offset down)
-        int step = (delta < 0 ? 12 : -12);
-        scrollOffsetPx = Mth.clamp(scrollOffsetPx + step, 0, Math.max(0, maxScrollPx));
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (!isInsideTextOrBar(mouseX, mouseY)) return false;
+        double lineHeight = lineHeight();
+        double deltaPx = -delta * WHEEL_LINES * lineHeight; // wheel up -> negative scroll (move view up)
+        setScrollOffset(scrollOffset + deltaPx);
         return true;
-        // (Scroller position updates on next render via 'frac')
     }
 
-    // ----------- Content building -----------
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button != 0) return false; // left click only for dragging
+        // Check if click on scroller knob
+        int sx = detailsOriginX + SCROLLER_X;
+        int sy = detailsOriginY + currentScrollerTopY();
+        if (hit(mouseX, mouseY, sx, sy, SCROLLER_W, SCROLLER_H)) {
+            draggingScroller = true;
+            dragYOffset = (int)mouseY - sy;
+            return true;
+        }
+        // Click on holder: jump scroller toward click and start drag
+        int hx = detailsOriginX + HOLDER_X;
+        int hy = detailsOriginY + HOLDER_Y;
+        if (hit(mouseX, mouseY, hx, hy, HOLDER_W, HOLDER_H)) {
+            int targetTop = (int)mouseY - detailsOriginY - (SCROLLER_H / 2);
+            targetTop = Mth.clamp(targetTop, SCROLLER_TOP_Y, SCROLLER_BOTTOM_Y);
+            setScrollerTopY(targetTop);
+            draggingScroller = true;
+            dragYOffset = (int)mouseY - (detailsOriginY + currentScrollerTopY());
+            return true;
+        }
+        return false;
+    }
 
-    private void rebuildIfNeeded() {
-        AngelDemonMenu menu = screen.getMenu();
-        ItemStack in = safeSlot(menu, 0);
-        ItemStack out = safeSlot(menu, 2);
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (!draggingScroller) return false;
+        int newTopLocal = (int)mouseY - detailsOriginY - dragYOffset;
+        newTopLocal = Mth.clamp(newTopLocal, SCROLLER_TOP_Y, SCROLLER_BOTTOM_Y);
+        setScrollerTopY(newTopLocal);
+        return true;
+    }
 
-        int previewPermille = menu.getPreviewChancePermille();
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (draggingScroller && button == 0) {
+            draggingScroller = false;
+            return true;
+        }
+        return false;
+    }
 
-        // Rebuild if input stack changed materially or preview chance changed
-        boolean mustRebuild =
-                !ItemStack.isSameItemSameComponents(in, lastSeenStack) ||
-                        (previewPermille != lastSeenPreviewPermille);
+    // -------------- Drawing helpers ----------------
 
-        if (!mustRebuild) return;
-
-        lastSeenStack = in.copy();
-        lastSeenPreviewPermille = previewPermille;
-        lines.clear();
-
+    private void drawRows(GuiGraphics gg, int x, int y, int w, int h) {
         Font font = screen.getMinecraft().font;
-        int lineH = font.lineHeight;
-        int textW = (TEXT_X1 - TEXT_X0);
+        int yCursor = y - (int)scrollOffset;
 
-        // Title / header
-        if (in.isEmpty()) {
-            addHeader(Component.literal("Insert a combat item"), textW, font);
-            addDim(Component.literal("Place a weapon/armor in the left slot."), textW, font);
+        for (Row r : rows) {
+            for (FormattedCharSequence line : r.lines) {
+                int lineH = (int)lineHeight();
+                // Vertical clip test
+                if (yCursor + lineH >= y && yCursor <= y + h) {
+                    int color = r.color;
+                    gg.drawString(font, line, x, yCursor, color, false);
+                }
+                yCursor += (int)lineHeight() + LINE_SPACING;
+            }
+        }
+    }
+
+    private double lineHeight() {
+        return screen.getMinecraft().font.lineHeight;
+    }
+
+    // -------------- Layout/build ----------------
+
+    private void rebuildRows() {
+        rows.clear();
+
+        // Subject item = slot 0 (input)
+        ItemStack subj = ItemStack.EMPTY;
+        try {
+            var menu = screen.getMenu();
+            subj = menu != null ? menu.getSlot(0).getItem() : ItemStack.EMPTY;
+        } catch (Throwable ignored) {}
+
+        final RitualType ritual = screen.getMenu().ritual();
+        final int width = TEXT_INSET_RIGHT - TEXT_INSET_LEFT;
+
+        // Item line (so user sees we detected the subject)
+        String itemName = subj.isEmpty() ? "—" : subj.getHoverName().getString();
+        addWrapped(itemName, ChatFormatting.AQUA, width);
+        addBlank();
+
+        // Section: Next attempt preview
+        addHeader("Next attempt");
+        Double ruleStep = uniqueRuleStepForThisItem(subj, ritual);
+        if (ruleStep != null) {
+            addWrapped(BULLET + "Per-upgrade boost: " + pct1(ruleStep), ChatFormatting.GRAY, width);
         } else {
-            addHeader(in.getHoverName(), textW, font);
-
-            // Current level (from iu_upgrade.level)
-            int curLvl = readItemLevel(in);
-            lines.add(Line.of(Component.literal("Level: " + curLvl), false));
-
-            // Preview
-            if (out.isEmpty()) {
-                // No preview or no resource
-                lines.add(Line.spacer());
-                addDim(Component.literal("Add an iron ingot to see the next-step preview."), textW, font);
-            } else if (isPreview(out)) {
-                lines.add(Line.spacer());
-                lines.add(Line.of(Component.literal("Next attempt (preview)"), true));
-
-                // chance text
-                int perMil = Mth.clamp(previewPermille, 0, 1000);
-                double pct = perMil / 10.0; // 0..100.0
-                lines.add(Line.of(Component.literal("Chance: " + format1(pct) + "%"), false));
-
-                // step percent from server tuning
-                double step = UpgradeServerConfig.snapshot().percentBonusForLevelUp(curLvl) * 100.0;
-                lines.add(Line.of(Component.literal("Step: +" + format1(step) + "%"), false));
-            }
-
-            lines.add(Line.spacer());
-
-            // What happened: totals
-            appendTotals(in, textW, font);
-
-            lines.add(Line.spacer());
-
-            // History (last ~10 lines)
-            appendHistory(in, textW, font, 10);
-
-            lines.add(Line.spacer());
-
-            // What could happen
-            appendPossibilities(curLvl, textW, font);
+            addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.GRAY, width);
         }
 
-        // Recompute content + scroll metrics
-        contentHeightPx = lines.size() * lineH;
-        int textH = (TEXT_Y1 - TEXT_Y0);
-        maxScrollPx = Math.max(0, contentHeightPx - textH);
+        // Chance line with reputation breakdown
+        ChanceParts chance = computeChanceWithRep(subj, ritual);
+        String repStr = (chance.repUnified >= 0 ? "+" : "") + PCT1.format(chance.repBonus * 100.0) +
+                "% from " + (chance.repUnified >= 0 ? "+" : "") + PCT0.format(chance.repUnified) + " rep";
+        addWrapped(BULLET + "Chance: " + PCT1.format(chance.total * 100.0) + "%  ("
+                + PCT1.format(chance.base * 100.0) + "% + " + repStr + ")", ChatFormatting.GRAY, width);
 
-        // Clamp offset to new max
-        scrollOffsetPx = Mth.clamp(scrollOffsetPx, 0, maxScrollPx);
+        // Divider
+        addBlank();
+
+        // Section: Totals (accumulated)
+        addHeader("Totals");
+        buildTotals(subj, width);
+
+        addBlank();
+
+        // Section: Recent history (newest first, green/red L transition)
+        addHeader("Recent history");
+        buildRecentHistory(subj, width);
+
+        addBlank();
+
+        // Section: Possible upgrades for this item (filtered by present attributes)
+        addHeader("Possible upgrades");
+        buildPossibleUpgradesForItem(subj, ritual, width);
+
+        // Compute content height
+        int total = 0;
+        for (Row r : rows) {
+            total += r.lines.size() * ((int)lineHeight() + LINE_SPACING);
+        }
+        contentHeight = total;
+        clampScrollToContent();
     }
 
-    private void appendTotals(ItemStack s, int textW, Font font) {
-        CustomData cd = s.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-        CompoundTag root = cd.copyTag().getCompound("iu_upgrade");
-        CompoundTag totals = root.getCompound("totals");
-        if (totals.isEmpty()) {
-            addDim(Component.literal("No upgrades applied yet."), textW, font);
+    // ----- Content builders -----
+
+    private void buildTotals(ItemStack s, int width) {
+        var tot = readTotals(s);
+        if (tot.isEmpty()) {
+            addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
             return;
         }
-
-        lines.add(Line.of(Component.literal("Totals"), true));
-
-        // Keep attribute display order stable by insertion
-        for (String key : totals.getAllKeys()) {
-            CompoundTag a = totals.getCompound(key);
-            double sumPct = a.getDouble("sumPercent") * 100.0;
-            double sumDelta = a.getDouble("sumDelta");
-
-            StringBuilder sb = new StringBuilder();
-            sb.append(humanizeAttr(key)).append(": ");
-
-            boolean had = false;
-            if (Math.abs(sumPct) > 1.0e-6) {
-                sb.append((sumPct >= 0 ? "+" : "")).append(format0(sumPct)).append("%");
-                had = true;
-            }
-            if (Math.abs(sumDelta) > 1.0e-6) {
-                if (had) sb.append(", ");
-                sb.append((sumDelta >= 0 ? "+" : "")).append(format2(sumDelta));
-                had = true;
-            }
-            if (!had) sb.append("—");
-
-            lines.add(Line.of(Component.literal(sb.toString()), false));
+        for (var e : tot.entrySet()) {
+            String display = resolveAttrDisplayName(e.getKey());
+            double pct = e.getValue(); // fraction
+            String line = BULLET + display + " " + (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%";
+            addWrapped(line, ChatFormatting.GRAY, width);
         }
     }
 
-    private void appendHistory(ItemStack s, int textW, Font font, int lastN) {
-        CustomData cd = s.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-        CompoundTag root = cd.copyTag().getCompound("iu_upgrade");
-        ListTag hist = root.getList("history", Tag.TAG_COMPOUND);
-        if (hist.isEmpty()) {
-            addDim(Component.literal("No history yet."), textW, font);
-            return;
-        }
+    @org.jetbrains.annotations.Nullable
+    private Double uniqueRuleStepForThisItem(ItemStack s, RitualType ritual) {
+        if (s == null || s.isEmpty()) return null;
 
-        Map<Integer, CompoundTag> events = new LinkedHashMap<>();
-        for (int i = 0; i < hist.size(); i++) {
-            CompoundTag ev = hist.getCompound(i);
-            events.put(i, ev);
-        }
-
-        lines.add(Line.of(Component.literal("Recent history"), true));
-
-        int start = Math.max(0, hist.size() - lastN);
-        for (int i = start; i < hist.size(); i++) {
-            CompoundTag ev = hist.getCompound(i);
-            String attr = humanizeAttr(ev.getString("attribute"));
-            int lb = ev.getInt("levelBefore");
-            int la = ev.getInt("levelAfter");
-            double pct = ev.getDouble("stepPercent") * 100.0;
-            double d = ev.getDouble("delta");
-            String rule = ev.getString("ruleId");
-
-            String txt;
-            if ("downgrade".equals(rule)) {
-                txt = String.format("L%d→L%d: downgrade %s (%s%.0f%%)", lb, la, attr, (pct >= 0 ? "+" : ""), pct);
-            } else {
-                String more = Math.abs(d) > 1e-6 ? String.format(", %s%.2f", (d >= 0 ? "+" : ""), d) : "";
-                txt = String.format("L%d→L%d: %s (%s%.0f%%%s)", lb, la, attr, (pct >= 0 ? "+" : ""), pct, more);
+        // Which attributes are actually present on the item?
+        Set<ResourceLocation> present = new java.util.LinkedHashSet<>();
+        try {
+            ItemAttributeModifiers cur = s.getAttributeModifiers();
+            for (Entry e : cur.modifiers()) {
+                var id = idOf(e.attribute());
+                if (id != null) present.add(id);
             }
-            lines.add(Line.of(Component.literal(txt), false));
-        }
-    }
+            ItemAttributeModifiers def = s.getItem().getDefaultAttributeModifiers(s);
+            for (Entry e : def.modifiers()) {
+                var id = idOf(e.attribute());
+                if (id != null) present.add(id);
+            }
+        } catch (Throwable ignored) {}
 
-    private void appendPossibilities(int curLvl, int textW, Font font) {
         var snap = UpgradeServerConfig.snapshot();
+        int level = parsePlusLevel(s);
+        double mult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
 
-        lines.add(Line.of(Component.literal("Possible upgrades"), true));
+        Double unique = null;
+        for (var rule : snap.attributes) {
+            if (!rule.enabled) continue;
+            if (!present.contains(rule.id)) continue;
 
-        // Attribute rules
-        for (var r : snap.attributes) {
-            if (!r.enabled) continue;
+            double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
+            double step = Math.max(0.0, base) * Math.max(0.0, mult);
+            if (step <= 0.0) continue;
 
-            String dir = r.direction == UpgradeServerConfig.Direction.INCREASE ? "+" : "−";
-            String stepStr;
-            if (r.stepType == UpgradeServerConfig.StepType.PERCENT) {
-                double step = (r.perLevelOverrides.getOrDefault(curLvl, r.defaultStep)) * 100.0;
-                stepStr = dir + format1(step) + "%";
-            } else {
-                double step = r.perLevelOverrides.getOrDefault(curLvl, r.defaultStep);
-                stepStr = dir + format2(step);
+            if (unique == null) {
+                unique = step;
+            } else if (Math.abs(step - unique) > 1.0e-9) {
+                // Different per-attr steps -> no single "unique" value
+                return null;
             }
+        }
+        return unique; // could be null if nothing matched
+    }
 
-            String line = String.format("%s (%s)", humanizeAttr(r.id.toString()), stepStr);
-            lines.add(Line.of(Component.literal(line), false));
+    private void buildRecentHistory(ItemStack s, int width) {
+        List<HistEvent> events = readHistory(s);
+        if (events.isEmpty()) {
+            addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
+            return;
         }
 
-        // Chances block
-        lines.add(Line.spacer());
-        lines.add(Line.of(Component.literal("Chances"), true));
+        // Newest first
+        Collections.reverse(events);
 
-        double base = snap.startChance;
-        double dec = snap.decrementPerLevel;
-        double minC = snap.minChance;
-        double ov = snap.chanceOverrides.getOrDefault(curLvl, Double.NaN);
+        for (HistEvent ev : events) {
+            boolean up = ev.levelAfter > ev.levelBefore;
+            ChatFormatting jumpColor = up ? ChatFormatting.GREEN : ChatFormatting.RED;
 
-        if (!Double.isNaN(ov)) {
-            lines.add(Line.of(Component.literal("Next: " + format1(ov * 100.0) + "% (override)"), false));
-        } else {
-            double c = Math.max(minC, base - curLvl * dec);
-            lines.add(Line.of(Component.literal("Next: " + format1(c * 100.0) + "%"), false));
+            String display = resolveAttrDisplayName(ev.attrId);
+            String amount = ev.appliedPercent != 0.0
+                    ? ((ev.appliedPercent >= 0 ? "+" : "") + PCT1.format(ev.appliedPercent * 100.0) + "%")
+                    : ((ev.deltaValue >= 0 ? "+" : "") + PCT1.format(ev.deltaValue));
+
+            // Only color the "Lx→Ly" part; leave the rest with default row color (gray)
+            Component line = Component.literal(BULLET)
+                    .append(Component.literal("L" + ev.levelBefore + "→L" + ev.levelAfter).withStyle(jumpColor))
+                    .append(Component.literal("  " + display + "  " + amount));
+
+            // Default row color = gray; styled segment overrides for the jump
+            addWrapped(line, mapColor(ChatFormatting.GRAY), width);
         }
-
-        lines.add(Line.of(Component.literal("Min: " + format1(minC * 100.0) + "%"), true));
     }
 
-    // ----------- Small helpers -----------
-
-    private int panelLeft() {
-        return screen.getLeftPos() + mainDrawDx() + MAIN_W + GAP_TO_MAIN;
-    }
-
-    private int panelTop() {
-        return screen.getTopPos() + mainDrawDy();
-    }
-
-    private static ItemStack safeSlot(AngelDemonMenu menu, int idx) {
+    private void buildPossibleUpgradesForItem(ItemStack s, RitualType ritual, int width) {
+        // Determine present attributes on the item (current + defaults)
+        Set<ResourceLocation> present = new LinkedHashSet<>();
         try {
-            return menu.getSlot(idx).getItem();
+            ItemAttributeModifiers cur = s.getAttributeModifiers();
+            for (Entry e : cur.modifiers()) {
+                var id = idOf(e.attribute());
+                if (id != null) present.add(id);
+            }
+            ItemAttributeModifiers def = s.getItem().getDefaultAttributeModifiers(s);
+            for (Entry e : def.modifiers()) {
+                var id = idOf(e.attribute());
+                if (id != null) present.add(id);
+            }
+        } catch (Throwable ignored) {}
+
+        var snap = UpgradeServerConfig.snapshot();
+        int level = parsePlusLevel(s);
+        double ritualMult = ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult;
+
+        int shown = 0;
+        for (var rule : snap.attributes) {
+            if (!rule.enabled) continue;
+            if (!present.contains(rule.id)) continue; // filter to attributes actually on the item
+            double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
+            double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
+            if (step <= 0.0) continue;
+
+            String display = resolveAttrDisplayName(rule.id.toString());
+            String dir = rule.direction == UpgradeServerConfig.Direction.INCREASE ? "+" : "−";
+            String line = BULLET + display + "  (" + dir + PCT1.format(step * 100.0) + "% per upgrade)";
+            addWrapped(line, ChatFormatting.GRAY, width);
+            shown++;
+        }
+        if (shown == 0) {
+            addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
+        }
+    }
+
+    // ----- Chance with reputation -----
+
+    private static final class ChanceParts {
+        final double base;      // base chance fraction
+        final double repBonus;  // reputation bonus fraction (can be negative)
+        final double total;     // clamped total
+        final double repUnified;
+        ChanceParts(double base, double repBonus, double total, double repUnified) {
+            this.base = base; this.repBonus = repBonus; this.total = total; this.repUnified = repUnified;
+        }
+    }
+
+    private ChanceParts computeChanceWithRep(ItemStack s, RitualType ritual) {
+        int currentLevel = parsePlusLevel(s);
+        double base = UpgradeService.getSuccessChance(currentLevel); // server model (base)
+
+        var snap = UpgradeServerConfig.snapshot();
+        double unified = screen.getRepUnified();
+        double towardSide = (ritual == RitualType.ANGEL) ? unified : -unified;
+        double repBonus = towardSide * snap.repBonusPerPoint;
+        double clamp = Math.max(0.0, snap.repBonusClamp);
+        repBonus = Mth.clamp(repBonus, -clamp, clamp);
+
+        double total = Mth.clamp(base + repBonus, 0.0, 1.0);
+        return new ChanceParts(base, repBonus, total, unified);
+    }
+
+    // -------------- Small helpers ----------------
+
+    private boolean isInsideTextOrBar(double mouseX, double mouseY) {
+        int x = (int)mouseX - detailsOriginX;
+        int y = (int)mouseY - detailsOriginY;
+        if (x >= TEXT_INSET_LEFT && x <= TEXT_INSET_RIGHT && y >= TEXT_INSET_TOP && y <= TEXT_INSET_BOTTOM) return true;
+        if (x >= HOLDER_X && x <= HOLDER_X + HOLDER_W && y >= HOLDER_Y && y <= HOLDER_Y + HOLDER_H) return true;
+        int scTop = currentScrollerTopY();
+        return (x >= SCROLLER_X && x <= SCROLLER_X + SCROLLER_W && y >= scTop && y <= scTop + SCROLLER_H);
+    }
+
+    private boolean hit(double mouseX, double mouseY, int x, int y, int w, int h) {
+        return mouseX >= x && mouseX < (x + w) && mouseY >= y && mouseY < (y + h);
+    }
+
+    private int currentScrollerTopY() {
+        double maxScroll = Math.max(0.0, contentHeight - (TEXT_INSET_BOTTOM - TEXT_INSET_TOP));
+        if (maxScroll <= 0.0) return SCROLLER_TOP_Y;
+
+        double t = Mth.clamp(scrollOffset / maxScroll, 0.0, 1.0);
+        int track = SCROLLER_BOTTOM_Y - SCROLLER_TOP_Y;
+        return SCROLLER_TOP_Y + (int)Math.round(t * track);
+    }
+
+    private void setScrollerTopY(int scrollerTopLocalY) {
+        int track = SCROLLER_BOTTOM_Y - SCROLLER_TOP_Y;
+        double t = (track <= 0) ? 0.0 : (double)(scrollerTopLocalY - SCROLLER_TOP_Y) / (double)track;
+        t = Mth.clamp(t, 0.0, 1.0);
+
+        double maxScroll = Math.max(0.0, contentHeight - (TEXT_INSET_BOTTOM - TEXT_INSET_TOP));
+        setScrollOffset(t * maxScroll);
+    }
+
+    private void setScrollOffset(double newOffsetPx) {
+        scrollOffset = newOffsetPx;
+        clampScrollToContent();
+    }
+
+    private void clampScrollToContent() {
+        double maxScroll = Math.max(0.0, contentHeight - (TEXT_INSET_BOTTOM - TEXT_INSET_TOP));
+        if (scrollOffset < 0.0) scrollOffset = 0.0;
+        if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+    }
+
+    private void addHeader(String title) {
+        int col = mapColor(ChatFormatting.YELLOW);
+        rows.add(Row.single(Component.literal(title).withStyle(ChatFormatting.YELLOW), col));
+    }
+
+    private void addBlank() {
+        rows.add(Row.single(Component.literal(" "), 0xFFFFFF));
+    }
+
+    private void addWrapped(Component text, int defaultColor, int width) {
+        Font font = screen.getMinecraft().font;
+        List<FormattedCharSequence> seq = font.split(text, width); // preserves per-segment styles
+        rows.add(new Row(seq, defaultColor));
+    }
+
+    private void addWrapped(String text, ChatFormatting color, int width) {
+        // Use the row's default color for the whole line (no per-segment styles here).
+        addWrapped(Component.literal(text), mapColor(color), width);
+    }
+
+    private int mapColor(ChatFormatting c) {
+        Integer v = c.getColor();
+        return v != null ? v : 0xFFFFFF;
+    }
+
+    private int parsePlusLevel(ItemStack stack) {
+        try {
+            String s = stack.getHoverName().getString();
+            int i = s.lastIndexOf('+');
+            if (i >= 0) {
+                String tail = s.substring(i + 1).trim();
+                int space = tail.indexOf(' ');
+                if (space > 0) tail = tail.substring(0, space);
+                return Integer.parseInt(tail);
+            }
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    private String resolveAttrDisplayName(String attrId) {
+        try {
+            var mc = screen.getMinecraft();
+            if (mc != null && mc.level != null) {
+                RegistryAccess access = mc.level.registryAccess();
+                Registry<Attribute> reg = access.registryOrThrow(Registries.ATTRIBUTE);
+                ResourceLocation rl = ResourceLocation.tryParse(attrId);
+                if (rl != null && reg.containsKey(rl)) {
+                    Attribute attr = reg.get(rl);
+                    if (attr != null) {
+                        return net.minecraft.network.chat.Component.translatable(attr.getDescriptionId()).getString();
+                    }
+                }
+            }
+        } catch (Throwable ignored) { }
+        String s = attrId;
+        int colon = s.indexOf(':');
+        if (colon >= 0) s = s.substring(colon + 1);
+        return s.replace('_', ' ').replace('.', ' ');
+    }
+
+    private Map<String, Double> readTotals(ItemStack s) {
+        Map<String, Double> out = new LinkedHashMap<>();
+        try {
+            CustomData cd = s.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+            if (cd == null) return out;
+            var root = cd.copyTag().getCompound("iu_upgrade");
+            var totals = root.getCompound("totals");
+            for (String key : totals.getAllKeys()) {
+                var a = totals.getCompound(key);
+                double sumPct = a.getDouble("sumPercent"); // fraction
+                out.put(key, sumPct);
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    private static final class HistEvent {
+        String attrId;
+        int levelBefore;
+        int levelAfter;
+        double appliedPercent; // fraction (+/-)
+        double deltaValue;     // numeric delta (if additive)
+    }
+
+    private List<HistEvent> readHistory(ItemStack s) {
+        List<HistEvent> out = new ArrayList<>();
+        try {
+            CustomData cd = s.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+            if (cd == null) return out;
+            var root = cd.copyTag().getCompound("iu_upgrade");
+            var hist = root.getList("history", net.minecraft.nbt.Tag.TAG_COMPOUND);
+            for (int i = 0; i < hist.size(); i++) {
+                var ev = hist.getCompound(i);
+                HistEvent h = new HistEvent();
+                h.attrId = ev.getString("attribute");
+                h.levelBefore = ev.getInt("levelBefore");
+                h.levelAfter  = ev.getInt("levelAfter");
+                h.appliedPercent = ev.getDouble("stepPercent");
+                h.deltaValue = ev.getDouble("delta");
+                out.add(h);
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    private static ResourceLocation idOf(Holder<Attribute> holder) {
+        try {
+            return holder != null ? holder.unwrapKey().map(ResourceKey::location).orElse(null) : null;
         } catch (Throwable t) {
-            return ItemStack.EMPTY;
+            return null;
         }
     }
 
-    private static boolean isPreview(ItemStack s) {
-        try {
-            if (s.isEmpty()) return false;
-            CustomData cd = s.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return false;
-            return cd.copyTag().getBoolean("iu_preview");
-        } catch (Throwable ignored) {
-            return false;
+    private static String pct1(double frac) { return PCT1.format(frac * 100.0) + "%"; }
+
+    // -------------- Row struct ----------------
+    private static final class Row {
+        final List<FormattedCharSequence> lines;
+        final int color;
+
+        Row(List<FormattedCharSequence> lines, int color) {
+            this.lines = lines;
+            this.color = color;
         }
-    }
 
-    private static int readItemLevel(ItemStack s) {
-        try {
-            CustomData cd = s.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-            return cd.copyTag().getCompound("iu_upgrade").getInt("level");
-        } catch (Throwable ignored) {
-            return 0;
+        static Row single(Component c, int color) {
+            return new Row(List.of(c.getVisualOrderText()), color);
         }
-    }
-
-    private static String humanizeAttr(String rl) {
-        // e.g. "minecraft:generic.attack_speed" -> "Attack Speed"
-        String s = rl;
-        int c = s.indexOf(':');
-        if (c >= 0) s = s.substring(c + 1);
-        s = s.replace('_', ' ').replace('.', ' ').trim();
-        if (s.isEmpty()) return rl;
-        String[] parts = s.split("\\s+");
-        StringBuilder out = new StringBuilder();
-        for (String p : parts) {
-            if (p.isEmpty()) continue;
-            out.append(Character.toUpperCase(p.charAt(0)));
-            if (p.length() > 1) out.append(p.substring(1));
-            out.append(' ');
-        }
-        return out.toString().trim();
-    }
-
-    private static String format0(double v) {
-        return String.format("%.0f", v);
-    }
-    private static String format1(double v) {
-        return String.format("%.1f", v);
-    }
-    private static String format2(double v) {
-        return String.format("%.2f", v);
-    }
-
-    // ----------- Line model -----------
-
-    public record Line(Component text, boolean dimmed) {
-        public static Line of(Component text, boolean dim) { return new Line(text, dim); }
-        public static Line spacer() { return new Line(Component.literal(""), true); }
-    }
-
-    // (Not using word-wrap into multiple components; keeping to single-line components for perf.)
-    private void addHeader(Component title, int textW, Font font) {
-        MutableComponent c = title.copy().withStyle(ChatFormatting.GOLD);
-        lines.add(Line.of(c, false));
-    }
-    private void addDim(Component text, int textW, Font font) {
-        lines.add(Line.of(text.copy().withStyle(ChatFormatting.GRAY), true));
     }
 }
