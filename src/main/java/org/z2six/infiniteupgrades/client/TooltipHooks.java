@@ -1,4 +1,3 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/client/TooltipHooks.java
 package org.z2six.infiniteupgrades.client;
 
 import com.mojang.logging.LogUtils;
@@ -18,7 +17,10 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.text.DecimalFormat;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * TooltipHooks – client-side tooltip augmentation for InfiniteUpgrades.
@@ -38,18 +40,21 @@ import java.util.*;
  * Defensive: if anything is missing or invalid, we skip and log at DEBUG. Never crashes.
  *
  * NOTE: This class is registered programmatically in ClientSetup (NeoForge.EVENT_BUS.addListener),
- * so there are no subscriber annotations here (keeps 1.21.1 clean of deprecation warnings).
+ * so there are no subscriber annotations here.
  */
 public final class TooltipHooks {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // NBT layout (matches your live items):
+    // NBT layout
     private static final String ROOT_UPGRADE_TAG = "iu_upgrade";
     private static final String HISTORY_TAG      = "history";
     private static final String ATTR_KEY         = "attribute";
     private static final String STEP_PCT_KEY     = "stepPercent";
     private static final String OLD_KEY          = "old";
     private static final String NEW_KEY          = "new";
+
+    // Attribute ids we want custom semantics for (display-side)
+    private static final String ATTACK_SPEED_ID  = "minecraft:generic.attack_speed";
 
     // Formatting
     private static final DecimalFormat PCT_FMT;
@@ -73,10 +78,9 @@ public final class TooltipHooks {
                 return;
             }
 
-            // 1) Build map: attribute-id -> compounded percent (Double)
+            // 1) Build map: attribute-id -> compounded percent (Double, in % units)
             final Map<String, Double> pctByAttrId = computeAllAttributePercents(stack);
             if (pctByAttrId.isEmpty()) {
-                // debug("No IU % available for this stack (no/invalid iu_upgrade history).");
                 return;
             }
 
@@ -84,7 +88,7 @@ public final class TooltipHooks {
             final RegistryAccess access = resolveRegistryAccess(event);
             final Registry<Attribute> attrReg = (access != null) ? access.registryOrThrow(Registries.ATTRIBUTE) : null;
 
-            // Map: lowercase localized name -> percent, plus a few safe fallbacks by id/path words
+            // Map: lowercase localized name -> percent, plus fallbacks by id/path words
             final Map<String, Double> nameToPct = new LinkedHashMap<>();
             for (Map.Entry<String, Double> e : pctByAttrId.entrySet()) {
                 final String idStr = e.getKey();
@@ -98,7 +102,6 @@ public final class TooltipHooks {
                         if (rl != null && attrReg.containsKey(rl)) {
                             Attribute attr = attrReg.get(rl);
                             if (attr != null) {
-                                // attribute.getDescriptionId() -> translation key "attribute.name.*"
                                 String display = Component.translatable(attr.getDescriptionId()).getString();
                                 if (display != null && !display.isBlank()) {
                                     nameToPct.put(display.toLowerCase(Locale.ROOT), pct);
@@ -111,9 +114,8 @@ public final class TooltipHooks {
                     debug("Registry resolution failed for {}: {}", idStr, t.toString());
                 }
 
-                // Fallbacks (helpful for odd/custom attributes or if registry not ready):
+                // Fallback: humanize id path (e.g., "generic.attack_speed" -> "attack speed")
                 if (!added) {
-                    // humanized path e.g. "generic.attack_damage" -> "attack damage"
                     String human = humanizeId(idStr);
                     if (!human.isBlank()) {
                         nameToPct.putIfAbsent(human, pct);
@@ -149,7 +151,7 @@ public final class TooltipHooks {
                 if (Math.abs(pct) < 0.0001) continue;
 
                 final String pctText = (pct >= 0 ? "(+" : "(") + trimZeros(pct) + "%)";
-                final ChatFormatting color = pct > 0.0001 ? ChatFormatting.GREEN
+                final ChatFormatting color = pct > 0.0001 ? ChatFormatting.AQUA
                         : pct < -0.0001 ? ChatFormatting.RED
                         : ChatFormatting.GRAY;
 
@@ -165,8 +167,11 @@ public final class TooltipHooks {
     }
 
     /**
-     * Builds a map of attribute-id -> compounded percent from iu_upgrade.history.
+     * Builds a map of attribute-id -> compounded percent (in % units) from iu_upgrade.history.
      * Uses stepPercent when present; else falls back to new/old.
+     *
+     * For attack speed, we flip the sign so improvements show positive:
+     * - The item modifier is a negative penalty to the player's base; reducing that penalty is an improvement.
      */
     private static Map<String, Double> computeAllAttributePercents(ItemStack stack) {
         final Map<String, Double> result = new LinkedHashMap<>();
@@ -201,7 +206,7 @@ public final class TooltipHooks {
                 boolean used = false;
 
                 if (step.contains(STEP_PCT_KEY, net.minecraft.nbt.Tag.TAG_DOUBLE)) {
-                    final double p = step.getDouble(STEP_PCT_KEY); // e.g., 0.05
+                    final double p = step.getDouble(STEP_PCT_KEY); // e.g., +0.05
                     stepFactor = 1.0 + p;
                     used = true;
                 } else if (step.contains(OLD_KEY, net.minecraft.nbt.Tag.TAG_DOUBLE) &&
@@ -220,14 +225,20 @@ public final class TooltipHooks {
                 countedByAttr.merge(attrId, 1, Integer::sum);
             }
 
-            // Convert factors to percents
+            // Convert factors to percents (compounded since base)
             for (Map.Entry<String, Double> e : factorByAttr.entrySet()) {
                 final String id = e.getKey();
                 final double factor = e.getValue();
                 final int count = countedByAttr.getOrDefault(id, 0);
                 if (count == 0) continue;
 
-                final double pct = (factor - 1.0) * 100.0;
+                double pct = (factor - 1.0) * 100.0;
+
+                // Display semantics: attack speed improvements should be positive
+                if (ATTACK_SPEED_ID.equals(id)) {
+                    pct = -pct; // invert for display
+                }
+
                 result.put(id, pct);
             }
         } catch (Throwable t) {
@@ -240,9 +251,7 @@ public final class TooltipHooks {
         try { return tag.getDouble(key); } catch (Throwable ignored) { return 0.0; }
     }
 
-    /**
-     * Resolve a usable RegistryAccess for attribute name translation.
-     */
+    /** Resolve a usable RegistryAccess for attribute name translation. */
     @Nullable
     private static RegistryAccess resolveRegistryAccess(ItemTooltipEvent event) {
         try {
@@ -258,9 +267,7 @@ public final class TooltipHooks {
         return null;
     }
 
-    /**
-     * Fallback: turn an id like "namespace:generic.attack_speed" into "attack speed".
-     */
+    /** Fallback: turn an id like "namespace:generic.attack_speed" into "attack speed". */
     private static String humanizeId(String id) {
         try {
             String s = id;

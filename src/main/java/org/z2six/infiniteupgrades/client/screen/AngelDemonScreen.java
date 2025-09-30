@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelDemonScreen.java
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
@@ -24,7 +23,8 @@ import org.z2six.infiniteupgrades.logic.RitualType;
 import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,17 +51,9 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     // Fudge used by subviews (keep here as well for computing rep bar vertical anchor)
     private static final int DRAW_FUDGE_Y = -1;
 
-    // Tooltip helpers (same logic you had)
+    // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
-
-    private static final Map<String, String> DISPLAY_TO_ATTR_ID = Map.of(
-            "attack damage", "minecraft:generic.attack_damage",
-            "attack speed", "minecraft:generic.attack_speed",
-            "armor toughness", "minecraft:generic.armor_toughness",
-            "knockback resistance", "minecraft:generic.knockback_resistance",
-            "armor", "minecraft:generic.armor"
-    );
 
     private MainGuiView mainView;
     private DetailsPanelView detailsView;
@@ -149,14 +141,11 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Tooltip routing
         Slot hoveredBefore = this.hoveredSlot;
         boolean interceptPreview = false;
-        boolean augmentReal = false;
 
         if (hoveredBefore != null && hoveredBefore.hasItem()) {
             ItemStack s = hoveredBefore.getItem();
             if (hoveredBefore.index == 2 && isPreview(s)) {
-                interceptPreview = true;
-            } else {
-                augmentReal = true;
+                interceptPreview = true; // we'll draw a special "mystery" tooltip
             }
         }
 
@@ -170,6 +159,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         if (repView != null) repView.render(gg);
 
         if (interceptPreview && hoveredBefore != null && hoveredBefore.hasItem()) {
+            // Custom tooltip for PREVIEW items: obfuscate numeric parts to avoid spoilers.
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
@@ -177,15 +167,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
                     .map(Component::getVisualOrderText)
                     .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
-        } else if (augmentReal && hoveredBefore != null && hoveredBefore.hasItem()) {
-            ItemStack stack = hoveredBefore.getItem();
-            List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
-            List<Component> modified = appendPercentFromAudit(stack, vanilla);
-            List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
-                    .map(Component::getVisualOrderText)
-                    .toList();
-            gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         } else {
+            // For REAL items, let the normal tooltip flow run (TooltipHooks will augment globally).
             this.renderTooltip(gg, mouseX, mouseY);
         }
     }
@@ -201,7 +184,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // no vanilla labels
     }
 
-    // ---------------- Tooltip helpers (unchanged core logic) ----------------
+    // ---------------- Tooltip helpers (preview obfuscation) ----------------
 
     private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
         List<Component> out = new ArrayList<>(vanilla.size());
@@ -243,79 +226,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
             out.add(rebuilt);
         }
         return out;
-    }
-
-    private static List<Component> appendPercentFromAudit(ItemStack stack, List<Component> vanilla) {
-        Map<String, Double> totals = readAuditPercents(stack);
-        if (totals.isEmpty()) return vanilla;
-
-        List<Component> out = new ArrayList<>(vanilla.size());
-        for (Component c : vanilla) {
-            String raw = c.getString();
-            String lower = raw.toLowerCase();
-
-            if (lower.startsWith("when ")) {
-                out.add(c);
-                continue;
-            }
-
-            String matchedAttrId = null;
-            for (Map.Entry<String, String> e : DISPLAY_TO_ATTR_ID.entrySet()) {
-                if (lower.contains(e.getKey())) {
-                    matchedAttrId = e.getValue();
-                    break;
-                }
-            }
-            if (matchedAttrId == null) {
-                out.add(c);
-                continue;
-            }
-
-            Double sumPct = totals.get(matchedAttrId);
-            if (sumPct == null || Math.abs(sumPct) < 1.0e-9) {
-                out.add(c);
-                continue;
-            }
-
-            String pctText = formatPercent(sumPct);
-            ChatFormatting col = sumPct >= 0.0 ? ChatFormatting.DARK_GREEN : ChatFormatting.RED;
-            MutableComponent withTail = c.copy().append(Component.literal(" (" + pctText + ")").withStyle(col));
-            out.add(withTail);
-        }
-        return out;
-    }
-
-    private static Map<String, Double> readAuditPercents(ItemStack stack) {
-        try {
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return Map.of();
-            var root = cd.copyTag().getCompound("iu_upgrade");
-            if (root == null) return Map.of();
-            var totals = root.getCompound("totals");
-            if (totals == null || totals.isEmpty()) return Map.of();
-
-            Map<String, Double> map = new HashMap<>();
-            for (String key : totals.getAllKeys()) {
-                var a = totals.getCompound(key);
-                double sumPercent = a.getDouble("sumPercent");
-                map.put(key, sumPercent);
-            }
-            return map;
-        } catch (Throwable ignored) {
-            return Map.of();
-        }
-    }
-
-    private static String formatPercent(double frac) {
-        double val = frac * 100.0;
-        double abs = Math.abs(val);
-        String sign = val >= 0 ? "+" : "-";
-        double rounded = (abs % 1.0 < 0.05) ? Math.rint(abs) : Math.round(abs * 10.0) / 10.0;
-        if (Math.abs(rounded - Math.rint(abs)) < 1e-9) {
-            return sign + ((int)Math.rint(abs)) + "%";
-        } else {
-            return sign + rounded + "%";
-        }
     }
 
     private static MutableComponent obfuscateBracketSegments(String text) {
