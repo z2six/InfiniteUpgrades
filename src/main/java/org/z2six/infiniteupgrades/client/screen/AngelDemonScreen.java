@@ -22,6 +22,7 @@ import org.z2six.infiniteupgrades.client.screen.view.ReputationBarView;
 import org.z2six.infiniteupgrades.logic.RitualType;
 import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
+import org.z2six.infiniteupgrades.client.screen.view.ProgressFillView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -58,6 +59,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private MainGuiView mainView;
     private DetailsPanelView detailsView;
     private ReputationBarView repView;
+    private ProgressFillView progressView;
 
     public AngelDemonScreen(AngelDemonMenu menu, Inventory inv, Component title) {
         super(menu, inv, Component.empty());
@@ -106,10 +108,10 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Create subviews
         mainView = new MainGuiView(this);
         detailsView = new DetailsPanelView(this);
+        progressView = new ProgressFillView(this); // <— NEW
 
-        // Rep bar anchor: centered relative to the MAIN panel only
+        // Rep bar anchor...
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
-        // 1px gap above main; include the same DRAW_FUDGE_Y used by views for visual alignment
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
         repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
 
@@ -176,6 +178,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
         if (mainView != null) mainView.renderBg(gg);
+        if (progressView != null) progressView.renderBg(gg); // <— draw animation overlay here
         if (detailsView != null) detailsView.renderBg(gg);
     }
 
