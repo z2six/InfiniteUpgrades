@@ -18,11 +18,11 @@ import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.screen.view.DetailsPanelView;
 import org.z2six.infiniteupgrades.client.screen.view.MainGuiView;
+import org.z2six.infiniteupgrades.client.screen.view.ProgressFillView;
 import org.z2six.infiniteupgrades.client.screen.view.ReputationBarView;
 import org.z2six.infiniteupgrades.logic.RitualType;
 import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
-import org.z2six.infiniteupgrades.client.screen.view.ProgressFillView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,8 +32,8 @@ import java.util.regex.Pattern;
 /**
  * Angel/Demon GUI screen split into sub-views:
  *  - MainGuiView       (main panel + infuse button)
- *  - DetailsPanelView  (static panel on the right)
- *  - ReputationBarView (above the main panel, centered on the main only)
+ *  - DetailsPanelView  (scrolling details panel on the right)
+ *  - ReputationBarView (bar above the main panel)
  *
  * Group centering: (Main + 1px + Details) are centered as one unit.
  * Reputation bar sits above main and does not push the group downward.
@@ -45,14 +45,14 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static final int GROUP_W = MainGuiView.MAIN_W + MainGuiView.GAP_TO_DETAILS + DetailsPanelView.DETAILS_W;
     private static final int GROUP_H = 222;
 
-    // Rep bar dims
+    // Rep bar dims (drawn above the main panel)
     private static final int REP_W = 96;
     private static final int REP_H = 11;
 
     // Fudge used by subviews (keep here as well for computing rep bar vertical anchor)
     private static final int DRAW_FUDGE_Y = -1;
 
-    // Tooltip helpers
+    // Tooltip helpers (obfuscate preview numeric parts)
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
 
@@ -108,14 +108,14 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Create subviews
         mainView = new MainGuiView(this);
         detailsView = new DetailsPanelView(this);
-        progressView = new ProgressFillView(this); // <— NEW
+        progressView = new ProgressFillView(this);
 
-        // Rep bar anchor...
+        // Rep bar anchor above the main panel
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
         repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
 
-        // Add & init subview widgets
+        // Add & init subview widgets (buttons live in mainView)
         mainView.onInit();
 
         // Ask the server for the current reputation snapshot
@@ -164,7 +164,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
             // Custom tooltip for PREVIEW items: obfuscate numeric parts to avoid spoilers.
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
-            List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
+            List<Component> modified = obfuscateNumericPartsInCombatLines(vanilla);
             List<net.minecraft.util.FormattedCharSequence> ordered = modified.stream()
                     .map(Component::getVisualOrderText)
                     .toList();
@@ -178,7 +178,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
         if (mainView != null) mainView.renderBg(gg);
-        if (progressView != null) progressView.renderBg(gg); // <— draw animation overlay here
+        if (progressView != null) progressView.renderBg(gg); // animation overlay
         if (detailsView != null) detailsView.renderBg(gg);
     }
 
@@ -187,9 +187,22 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // no vanilla labels
     }
 
+    // --- Input: wheel / trackpad scroll routed to details panel only ---
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
+        // Prefer vertical; if a device only sends horizontal, use that.
+        double delta = (deltaY != 0.0) ? deltaY : deltaX;
+
+        if (detailsView != null && detailsView.handleScroll(mouseX, mouseY, delta)) {
+            return true; // consumed by details panel
+        }
+        return super.mouseScrolled(mouseX, mouseY, deltaX, deltaY);
+    }
+
     // ---------------- Tooltip helpers (preview obfuscation) ----------------
 
-    private static List<Component> obfuscateNumericPartsInCombatLines(ItemStack preview, List<Component> vanilla) {
+    private List<Component> obfuscateNumericPartsInCombatLines(List<Component> vanilla) {
         List<Component> out = new ArrayList<>(vanilla.size());
         for (Component c : vanilla) {
             String raw = c.getString();
