@@ -171,6 +171,176 @@ public final class UpgradeService {
 
     public static record Result(ItemStack upgraded, boolean success, int newLevel) {}
 
+    // -------------------- Option A: Exact rollback of the last level --------------------
+
+    /**
+     * Downgrade the item exactly one level (+N -> +N-1) by reverting the precise per-attribute
+     * changes recorded in iu_upgrade.history for levelAfter==N. If no history is found for N,
+     * falls back to an angel-style proportional rollback across configured attributes.
+     *
+     * Returns a NEW ItemStack copy with downgraded modifiers, audit, and colored name suffix.
+     */
+    public static ItemStack downgradeLastLevel(ItemStack original) {
+        try {
+            if (original == null || original.isEmpty()) return ItemStack.EMPTY;
+
+            ItemStack copy = original.copy();
+            int currentLevel = parseLevel(copy);
+            if (currentLevel <= 0) {
+                // Nothing to downgrade
+                return copy;
+            }
+            int newLevel = currentLevel - 1;
+
+            // Read audit
+            CustomData cd = copy.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+            CompoundTag root = cd.copyTag().getCompound("iu_upgrade");
+            ListTag hist = root.getList("history", Tag.TAG_COMPOUND);
+
+            // Collect all events for the last level (levelAfter == currentLevel)
+            List<CompoundTag> lastEvents = new ArrayList<>();
+            for (int i = 0; i < hist.size(); i++) {
+                CompoundTag ev = hist.getCompound(i);
+                if (ev.getInt("levelAfter") == currentLevel) {
+                    lastEvents.add(ev);
+                }
+            }
+
+            if (!lastEvents.isEmpty()) {
+                // Build a mutable working list of attribute entries
+                List<Entry> entries = new ArrayList<>(safeModifiers(copy).modifiers());
+
+                // For matching, we need attribute RL + operation; choose the entry whose amount is closest to the recorded 'new'
+                for (CompoundTag ev : lastEvents) {
+                    String attrKey = ev.getString("attribute");
+                    String opName  = ev.getString("op");
+                    double oldVal  = ev.getDouble("old");
+                    double newVal  = ev.getDouble("new");
+                    double stepPct = ev.getDouble("stepPercent");
+
+                    // Find best matching entry
+                    int bestIdx = -1;
+                    double bestDiff = Double.POSITIVE_INFINITY;
+
+                    for (int idx = 0; idx < entries.size(); idx++) {
+                        Entry e = entries.get(idx);
+                        ResourceLocation id = idOf(e.attribute());
+                        if (id == null || !id.toString().equals(attrKey)) continue;
+                        if (!e.modifier().operation().name().equals(opName)) continue;
+
+                        double diff = Math.abs(e.modifier().amount() - newVal);
+                        if (diff < bestDiff) {
+                            bestDiff = diff;
+                            bestIdx = idx;
+                        }
+                    }
+
+                    if (bestIdx >= 0) {
+                        // Replace amount with recorded old value, preserving id/op/slot
+                        Entry e = entries.get(bestIdx);
+                        AttributeModifier m = e.modifier();
+                        AttributeModifier reverted = new AttributeModifier(m.id(), oldVal, m.operation());
+                        entries.set(bestIdx, new Entry(e.attribute(), reverted, e.slot()));
+                    } else {
+                        LOG.debug("[UpgradeService] downgradeLastLevel: no entry matched attr={} op={}, skipping one delta", attrKey, opName);
+                    }
+                }
+
+                // Commit modifiers
+                copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(entries));
+
+                // Update audit: level -> newLevel, adjust totals, append downgrade events
+                CustomData updated = cd.update(tag -> {
+                    CompoundTag r = tag.getCompound("iu_upgrade");
+                    r.putInt("level", newLevel);
+
+                    CompoundTag totals = r.getCompound("totals");
+                    ListTag history = r.getList("history", Tag.TAG_COMPOUND);
+
+                    for (CompoundTag ev : lastEvents) {
+                        String attrKey = ev.getString("attribute");
+                        double delta = ev.getDouble("delta");
+                        double stepPct = ev.getDouble("stepPercent");
+                        double oldVal = ev.getDouble("old");
+                        double newVal = ev.getDouble("new");
+                        String opName = ev.getString("op");
+
+                        // Subtract from totals
+                        CompoundTag a = totals.getCompound(attrKey);
+                        a.putDouble("sumDelta", a.getDouble("sumDelta") - delta);
+                        a.putDouble("sumPercent", a.getDouble("sumPercent") - stepPct);
+                        a.putDouble("lastDelta", -delta);
+                        a.putDouble("lastPercent", -stepPct);
+                        totals.put(attrKey, a);
+
+                        // Append explicit downgrade event (for transparency)
+                        CompoundTag down = new CompoundTag();
+                        down.putLong("time", System.currentTimeMillis());
+                        down.putInt("levelBefore", currentLevel);
+                        down.putInt("levelAfter", newLevel);
+                        down.putString("attribute", attrKey);
+                        down.putString("op", opName);
+                        down.putDouble("old", newVal);           // before revert
+                        down.putDouble("delta", -delta);         // negative of the original delta
+                        down.putDouble("new", oldVal);           // after revert
+                        down.putDouble("stepPercent", -stepPct);
+                        down.putString("ruleId", "downgrade");
+                        history.add(down);
+                    }
+
+                    r.put("totals", totals);
+                    r.put("history", history);
+                    tag.put("iu_upgrade", r);
+                });
+                copy.set(DataComponents.CUSTOM_DATA, updated);
+
+                // Update the display name suffix
+                applyColoredSuffix(copy, newLevel);
+                return copy;
+            }
+
+            // --- Fallback (no history for current level): angel-style proportional rollback ---
+            LOG.debug("[UpgradeService] downgradeLastLevel: no history for level {}, using proportional fallback", currentLevel);
+            return fallbackProportionalRollback(copy, newLevel);
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] downgradeLastLevel failed: {}", t.toString());
+            return original.copy();
+        }
+    }
+
+    /** Fallback path if we lack history for the current level: scale back by 1/(1+step) across configured attributes. */
+    private static ItemStack fallbackProportionalRollback(ItemStack stack, int newLevel) {
+        ItemStack copy = stack.copy();
+        Snapshot snap = UpgradeServerConfig.snapshot();
+        double step = Math.max(0.0, snap.percentBonusForLevelUp(newLevel));
+        double factor = (step <= 0.0) ? 1.0 : (1.0 / (1.0 + step));
+
+        // Restrict to attributes we manage (present in rules)
+        Set<ResourceLocation> managed = new HashSet<>();
+        for (var r : snap.attributes) {
+            if (r.enabled) managed.add(r.id);
+        }
+
+        ItemAttributeModifiers cur = copy.getAttributeModifiers();
+        ItemAttributeModifiers.Builder b = ItemAttributeModifiers.builder();
+        for (Entry e : cur.modifiers()) {
+            Holder<Attribute> a = e.attribute();
+            AttributeModifier m = e.modifier();
+            ResourceLocation id = idOf(a);
+            if (m == null || id == null || !managed.contains(id)) {
+                b.add(a, m, e.slot());
+                continue;
+            }
+            double scaled = m.amount() * factor;
+            b.add(a, new AttributeModifier(m.id(), scaled, m.operation()), e.slot());
+        }
+        copy.set(DataComponents.ATTRIBUTE_MODIFIERS, b.build());
+
+        // Update level suffix only (audit unknown; do not mutate totals without history)
+        applyColoredSuffix(copy, Math.max(0, newLevel));
+        return copy;
+    }
+
     // -------------------- Rule application --------------------
 
     private static class AttributeDelta {

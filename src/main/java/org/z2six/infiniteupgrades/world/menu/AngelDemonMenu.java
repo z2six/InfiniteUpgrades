@@ -116,7 +116,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
     private long pendingEndGameTime = -1L;           // server: level.getGameTime() tick to finalize
     private boolean pendingSuccess = false;          // precomputed outcome at attempt start
     private ItemStack pendingUpgraded = ItemStack.EMPTY; // precomputed upgraded result (if success)
-    private ItemStack pendingOriginal = ItemStack.EMPTY; // snapshot of the original input (for restore on fail)
+    private ItemStack pendingOriginal = ItemStack.EMPTY; // snapshot of the original input (for restore/downgrade)
 
     // ---- Client-side convenience (for step 2 UI lock/anim) ----
     private long clientLockEndGameTime = -1L; // received via S2C; UI reads this for animation/lock
@@ -274,7 +274,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 return;
             }
 
-            // Snapshot the original input for restoration on failure, and to remove from player access
+            // Snapshot the original input for restoration/downgrade on failure, and to remove from player access
             ItemStack originalCopy = in.copy();
 
             int cur = parseBaseNameAndLevel(in.getHoverName()).getSecond();
@@ -290,7 +290,6 @@ public class AngelDemonMenu extends AbstractContainerMenu {
             baseInv.setItem(1, res);
 
             // Remove the original input from access immediately to prevent duplication exploits.
-            // Keep a server-side snapshot in pendingOriginal to restore on fail.
             pendingOriginal = originalCopy;
             withPreviewSuppressed(() -> baseInv.setItem(0, ItemStack.EMPTY));
 
@@ -374,14 +373,14 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                     baseInv.setItem(2, upgradedIfSuccess);        // real result into output
                 });
             } else {
-                LOG.info("[AngelDemonMenu] Infuse FAIL finalize (ritual={})", ritual);
-                // Restore the original input stack on failure (since we removed it at start)
+                LOG.info("[AngelDemonMenu] Infuse FAIL finalize (ritual={}) -> downgrade last level", ritual);
                 if (!pendingOriginal.isEmpty()) {
-                    ItemStack restore = pendingOriginal;
+                    // Downgrade +N -> +N-1 and place the downgraded item in OUTPUT
+                    ItemStack downgraded = UpgradeService.downgradeLastLevel(pendingOriginal);
                     pendingOriginal = ItemStack.EMPTY;
-                    withPreviewSuppressed(() -> baseInv.setItem(0, restore));
+                    withPreviewSuppressed(() -> baseInv.setItem(2, downgraded));
                 }
-                updatePreview();
+                // No preview while a real result is present
             }
 
             syncToClient("infuse finalize");
