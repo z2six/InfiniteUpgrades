@@ -13,11 +13,12 @@ import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.Reputation;
+import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
 /**
- * Network registration + helpers for reputation sync.
+ * Network registration + helpers for reputation sync and infusion S2C notifications.
  */
-@EventBusSubscriber(modid = Infiniteupgrades.MODID) // default is MOD bus; 'bus' parameter is deprecated
+@EventBusSubscriber(modid = Infiniteupgrades.MODID) // default MOD bus; 'bus' param deprecated on NeoForge 1.21.1
 public final class ModNet {
     private static final Logger LOG = LogUtils.getLogger();
 
@@ -26,6 +27,8 @@ public final class ModNet {
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
         var reg = event.registrar(Infiniteupgrades.MODID);
+
+        // --- Reputation messages ---
 
         // Client -> Server: request snapshot
         reg.playToServer(RepRequestC2S.TYPE, RepRequestC2S.STREAM_CODEC, (payload, ctx) -> {
@@ -52,6 +55,37 @@ public final class ModNet {
                 }
             });
         });
+
+        // --- Infusion S2C messages (timer + result) ---
+
+        reg.playToClient(InfuseStartedS2C.TYPE, InfuseStartedS2C.STREAM_CODEC, (payload, ctx) -> {
+            ctx.enqueueWork(() -> {
+                try {
+                    var mc = Minecraft.getInstance();
+                    if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
+                        // We purposefully do not rely on containerId here; one container at a time per player.
+                        menu.clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
+                        LOG.debug("[ModNet] S2C InfuseStarted: endTime={} durationTicks={}", payload.endGameTime(), payload.durationTicks());
+                    }
+                } catch (Throwable t) {
+                    LOG.error("[ModNet] Failed to apply InfuseStartedS2C on client", t);
+                }
+            });
+        });
+
+        reg.playToClient(InfuseResultS2C.TYPE, InfuseResultS2C.STREAM_CODEC, (payload, ctx) -> {
+            ctx.enqueueWork(() -> {
+                try {
+                    var mc = Minecraft.getInstance();
+                    if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
+                        menu.clientOnInfuseResult(payload.success());
+                        LOG.debug("[ModNet] S2C InfuseResult: success={}", payload.success());
+                    }
+                } catch (Throwable t) {
+                    LOG.error("[ModNet] Failed to apply InfuseResultS2C on client", t);
+                }
+            });
+        });
     }
 
     // --- Helpers ---
@@ -73,6 +107,24 @@ public final class ModNet {
             PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(unified, repMax));
         } catch (Throwable t) {
             LOG.error("[ModNet] Failed to send RepSnapshotS2C to {}", sp, t);
+        }
+    }
+
+    /** Server call: notify client that an infusion attempt has started with a delay. */
+    public static void sendInfuseStartedTo(ServerPlayer sp, int containerId, long endGameTime, int durationTicks) {
+        try {
+            PacketDistributor.sendToPlayer(sp, new InfuseStartedS2C(containerId, endGameTime, durationTicks));
+        } catch (Throwable t) {
+            LOG.error("[ModNet] Failed to send InfuseStartedS2C to {}", sp, t);
+        }
+    }
+
+    /** Server call: notify client that the infusion attempt finalized. */
+    public static void sendInfuseResultTo(ServerPlayer sp, int containerId, boolean success) {
+        try {
+            PacketDistributor.sendToPlayer(sp, new InfuseResultS2C(containerId, success));
+        } catch (Throwable t) {
+            LOG.error("[ModNet] Failed to send InfuseResultS2C to {}", sp, t);
         }
     }
 }

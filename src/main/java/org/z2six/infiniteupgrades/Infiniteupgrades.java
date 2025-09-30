@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/InfiniteUpgrades.java
+// File: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
 package org.z2six.infiniteupgrades;
 
 // NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.
@@ -96,9 +96,11 @@ public class Infiniteupgrades {
         // Register GAME-bus listeners programmatically (Bus.GAME is deprecated)
         try {
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.logic.RepEvents::onPlayerClone);
+            // NEW: infusion timer tick finalizer
+            NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.logic.InfuseTimers::onLevelTick);
             // NEW: register admin commands (requires OP >= 3)
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.commands.RepCommands::register);
-            LOGGER.debug("[Infiniteupgrades] Registered RepEvents & RepCommands on NeoForge.EVENT_BUS");
+            LOGGER.debug("[Infiniteupgrades] Registered RepEvents, InfuseTimers & RepCommands on NeoForge.EVENT_BUS");
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to register listeners", t);
         }
