@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/ChanceConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -10,30 +9,60 @@ import java.util.Map;
 import static org.z2six.infiniteupgrades.config.parsing.ConfigParsing.clamp01;
 import static org.z2six.infiniteupgrades.config.parsing.ConfigParsing.parseLevelDoubleMap;
 
-/** Chance section: model + numeric knobs + overrides. */
+/**
+ * User-friendly infusion success chance.
+ *
+ * You control how the base success chance changes as the item's +level increases.
+ * (Reputation bonuses/penalties are applied on top elsewhere; see reputation.*)
+ */
 public final class ChanceConfigSpec {
 
     public final ModConfigSpec.EnumValue<ChanceModelType> model;
     public final ModConfigSpec.DoubleValue startChance;
-    public final ModConfigSpec.DoubleValue decrementPerLevel;   // for FLAT
-    public final ModConfigSpec.DoubleValue minChance;           // NEW: clamp floor for FLAT
-    public final ModConfigSpec.DoubleValue exponentialBase;     // for EXP
+    public final ModConfigSpec.DoubleValue decrementPerLevel;   // FLAT model
+    public final ModConfigSpec.DoubleValue minChance;           // FLAT clamp
+    public final ModConfigSpec.DoubleValue exponentialBase;     // EXP model
     public final ModConfigSpec.ConfigValue<List<? extends String>> overridesKV;
 
     private ChanceConfigSpec(ModConfigSpec.Builder B) {
         B.push("chance");
-        model = B.comment("Chance model type.")
-                .defineEnum("model", ChanceModelType.FLAT_DECREMENT);
-        startChance = B.comment("Starting chance (0..1) for +0->+1.")
+
+        model = B.comment(
+                "Which curve to use for BASE success chance by level:",
+                " - FLAT_DECREMENT: startChance − (decrementPerLevel × currentLevel), clamped at minChance.",
+                " - EXP: startChance × (exponentialBase ^ currentLevel).",
+                "",
+                "Tip: You can also set exact values per level via 'overrides' below."
+        ).defineEnum("model", ChanceModelType.FLAT_DECREMENT);
+
+        startChance = B.comment(
+                        "Chance for the first upgrade (+0 → +1). Range: 0..1",
+                        "Examples: 1.0 = 100%, 0.75 = 75%, 0.50 = 50%")
                 .defineInRange("startChance", 1.0, 0.0, 1.0);
-        decrementPerLevel = B.comment("Chance decrement per existing level (FLAT model).")
+
+        decrementPerLevel = B.comment(
+                        "[FLAT_DECREMENT only] How much the chance drops each existing level.",
+                        "Example: startChance=1.0, decrement=0.05 →",
+                        "  +0→+1: 100%, +1→+2: 95%, +2→+3: 90%, ... then clamped at minChance.")
                 .defineInRange("decrementPerLevel", 0.05, 0.0, 1.0);
-        minChance = B.comment("Minimum clamped chance (FLAT model).")
+
+        minChance = B.comment(
+                        "[FLAT_DECREMENT only] Chance cannot drop below this floor.",
+                        "Example: 0.10 means it will never be below 10%.")
                 .defineInRange("minChance", 0.0, 0.0, 1.0);
-        exponentialBase = B.comment("Exponential base for per-level chance (EXP model). Example: 0.95")
+
+        exponentialBase = B.comment(
+                        "[EXP only] The multiplier per current level.",
+                        "Example: startChance=1.0, base=0.95 →",
+                        "  +0→+1: 100%, +1→+2: 95%, +2→+3: ~90.25%, etc.")
                 .defineInRange("exponentialBase", 0.95, 0.0, 1.0);
-        overridesKV = B.comment("Chance overrides per current level, format: \"level=chance\".")
-                .defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
+
+        overridesKV = B.comment(
+                "Exact per-level overrides. Format: \"level=fraction\" (0..1).",
+                "These replace the model for that level if present.",
+                "Examples: [\"1=1.0\",\"2=0.95\",\"10=0.25\"]"
+        ).defineListAllowEmpty("overrides", List.of("1=1.0", "2=0.95"), o -> o instanceof String);
+
         B.pop();
     }
 

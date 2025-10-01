@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/TuningConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -7,7 +6,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-
+/**
+ * Global tuning for step % bumps by level.
+ *
+ * This defines a simple “base” percent per upgrade and optional tier bumps at
+ * specific levels. Attribute rules can still override per-attribute step sizes.
+ *
+ * Order of precedence (for step on a given attribute):
+ *   1) Attribute rule per-level override (strongest)
+ *   2) Attribute rule defaultStep
+ *   3) (Only if your implementation consults this tuning) tuning.stepPercent + bonusSteps
+ *      (This is a convenient global knob; attribute rules typically take priority.)
+ *
+ * Ritual multipliers are applied AFTER the step is resolved:
+ *   final step = resolved_step × rituals.(angel|demon)StepMultiplier
+ */
 public final class TuningConfigSpec {
 
     public final ModConfigSpec.DoubleValue stepPercent;
@@ -16,11 +29,16 @@ public final class TuningConfigSpec {
     private TuningConfigSpec(ModConfigSpec.Builder B) {
         B.push("tuning");
 
-        stepPercent = B.comment("Attribute bonus per level (fraction). Example: 0.05 = +5% per level.")
-                .defineInRange("stepPercent", 0.01, 0.0, 10.0);
+        stepPercent = B.comment(
+                "Base percent per successful upgrade (fraction).",
+                "Example: 0.05 = +5% per upgrade.",
+                "If you are using per-attribute rules (recommended), those will usually override this."
+        ).defineInRange("stepPercent", 0.01, 0.0, 10.0);
 
-        bonusStepsKV = B.comment("Tier bumps. Format: \"level=bonusPercent\". Example: [\"5=0.10\",\"10=0.10\"].")
-                .defineListAllowEmpty("bonusSteps", List.of(), o -> o instanceof String);
+        bonusStepsKV = B.comment(
+                "Extra bonus added at specific CURRENT levels (fraction). Format: \"level=bonus\".",
+                "Example: [\"5=0.10\",\"10=0.10\"] → at +5 and +10, add +10% to that upgrade’s step."
+        ).defineListAllowEmpty("bonusSteps", List.of(), o -> o instanceof String);
 
         B.pop();
     }

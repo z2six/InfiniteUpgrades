@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/SoulsConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import net.minecraft.resources.ResourceLocation;
@@ -12,23 +11,25 @@ import java.util.Set;
 import static org.z2six.infiniteupgrades.config.parsing.ConfigParsing.*;
 
 /**
- * Isolated "souls" section definition and snapshot builder.
- * This keeps 100% of existing logic intact, just moved out of UpgradeServerConfig.
+ * Soul orb drop settings (friendly edition).
+ *
+ * You can enable/disable drops, choose how tiers are picked, clamp who can drop,
+ * and even spawn light at the drop location.
  */
 public final class SoulsConfigSpec {
 
-    // Spec entries
+    // Basic toggles
     public final ModConfigSpec.BooleanValue enabled;
     public final ModConfigSpec.DoubleValue  dropChance;
 
     public final ModConfigSpec.EnumValue<SoulsDropModel> dropModel;
 
-    // RATIO model
+    // RATIO model knobs
     public final ModConfigSpec.DoubleValue  hpToSoulsRatio;
     public final ModConfigSpec.IntValue     minUnitsForDrop;
     public final ModConfigSpec.ConfigValue<List<? extends String>> tierUnitsKV;
 
-    // HP_THRESHOLDS model
+    // HP_THRESHOLDS model knobs
     public final ModConfigSpec.ConfigValue<List<? extends String>> tierMinHeartsKV;
 
     public final ModConfigSpec.IntValue     lifetimeSeconds;
@@ -36,65 +37,91 @@ public final class SoulsConfigSpec {
     public final ModConfigSpec.ConfigValue<List<? extends String>> whitelistIds;
     public final ModConfigSpec.ConfigValue<List<? extends String>> blacklistIds;
 
-    // NEW: Light controls
+    // Cosmetic/utility
     public final ModConfigSpec.BooleanValue spawnLights;
     public final ModConfigSpec.IntValue     lightRadiusBlocks;
 
     private SoulsConfigSpec(ModConfigSpec.Builder B) {
         B.push("souls");
 
-        enabled     = B.comment("Enable soul orb drops.").define("enabled", true);
-        dropChance  = B.comment("Chance (0..1) that a soul orb drops when eligible.")
-                .defineInRange("dropChance", 1.0, 0.0, 1.0);
+        enabled     = B.comment(
+                "Master switch: enable/disable soul orb drops."
+        ).define("enabled", true);
 
-        dropModel   = B.comment("How tiers are chosen: RATIO (legacy) or HP_THRESHOLDS (by hearts).")
-                .defineEnum("dropModel", SoulsDropModel.HP_THRESHOLDS);
+        dropChance  = B.comment(
+                "Chance (0..1) that a soul orb drops WHEN eligible by the chosen model and filters.",
+                "1.0 = always drop when eligible, 0.25 = 25% chance when eligible."
+        ).defineInRange("dropChance", 1.0, 0.0, 1.0);
 
-        hpToSoulsRatio    = B.comment("RATIO model only: units = floor(max_hp * hpToSoulsRatio).")
-                .defineInRange("hpToSoulsRatio", 0.75, 0.0, 1000.0);
-        minUnitsForDrop   = B.comment("RATIO model only: if units < this, no drop occurs.")
-                .defineInRange("minUnitsForDrop", 1, 0, 1_000_000);
-        tierUnitsKV       = B.comment("RATIO model only: tier unit mapping. Format: \"TIER=units\".",
-                        "Largest tier with unitValue <= units will drop.",
-                        "Default: [\"SMALL=1\",\"MEDIUM=4\",\"LARGE=8\",\"EXTRA_LARGE=16\"]")
-                .defineListAllowEmpty("tierUnits",
-                        List.of("SMALL=1","MEDIUM=4","LARGE=8","EXTRA_LARGE=16"),
-                        o -> o instanceof String);
+        dropModel   = B.comment(
+                "How we choose the tier to drop:",
+                " - RATIO:       Convert victim max HP into 'units' (hpToSoulsRatio), pick tier by unit breakpoints.",
+                " - HP_THRESHOLDS: Use victim max hearts (HP/2) against per-tier minimum heart thresholds."
+        ).defineEnum("dropModel", SoulsDropModel.HP_THRESHOLDS);
 
-        tierMinHeartsKV   = B.comment("HP_THRESHOLDS model only: minimum *hearts* required per tier.",
-                        "We pick the HIGHEST tier whose minHearts <= victim.maxHearts.",
-                        "Hearts = HP / 2. Defaults:",
-                        "[\"SMALL=0\",\"MEDIUM=10\",\"LARGE=20\",\"EXTRA_LARGE=40\"]")
-                .defineListAllowEmpty("tierMinHearts",
-                        List.of("SMALL=0","MEDIUM=10","LARGE=20","EXTRA_LARGE=40"),
-                        o -> o instanceof String);
+        // ---- RATIO model ----
+        hpToSoulsRatio    = B.comment(
+                "[RATIO model] units = floor(max_hp × hpToSoulsRatio).",
+                "Example: 40 HP with ratio=0.75 → floor(30) = 30 units."
+        ).defineInRange("hpToSoulsRatio", 0.75, 0.0, 1000.0);
 
-        lifetimeSeconds   = B.comment("Orb lifetime in seconds.")
-                .defineInRange("lifetimeSeconds", 30, 1, 3_600);
-        allowPvP          = B.comment("Allow orb drops from player deaths (PvP or otherwise).")
-                .define("allowPvP", false);
-        whitelistIds      = B.comment("Whitelist of entity IDs allowed to drop orbs. If non-empty, only listed IDs drop.")
-                .defineListAllowEmpty("whitelistEntities", List.of(), o -> o instanceof String);
-        blacklistIds      = B.comment("Blacklist of entity IDs that must NOT drop orbs.")
-                .defineListAllowEmpty("blacklistEntities", List.of(), o -> o instanceof String);
+        minUnitsForDrop   = B.comment(
+                "[RATIO model] If computed units < this, do not drop a soul."
+        ).defineInRange("minUnitsForDrop", 1, 0, 1_000_000);
 
-        // NEW: lights
-        spawnLights = B.comment("If true, spawn a light at each soul's spawn position.")
-                .define("spawnLights", true);
+        tierUnitsKV       = B.comment(
+                "[RATIO model] Tier thresholds in UNITS. Format: \"TIER=units\".",
+                "We drop the LARGEST tier whose units <= computed units.",
+                "Default: [\"SMALL=1\",\"MEDIUM=4\",\"LARGE=8\",\"EXTRA_LARGE=16\"]"
+        ).defineListAllowEmpty("tierUnits",
+                List.of("SMALL=1","MEDIUM=4","LARGE=8","EXTRA_LARGE=16"),
+                o -> o instanceof String);
+
+        // ---- HP_THRESHOLDS model ----
+        tierMinHeartsKV   = B.comment(
+                "[HP_THRESHOLDS model] Tier minimum HEARTS required.",
+                "We drop the HIGHEST tier whose minHearts <= victim.maxHearts.",
+                "Hearts = HP / 2. Default:",
+                "[\"SMALL=0\",\"MEDIUM=10\",\"LARGE=20\",\"EXTRA_LARGE=40\"]"
+        ).defineListAllowEmpty("tierMinHearts",
+                List.of("SMALL=0","MEDIUM=10","LARGE=20","EXTRA_LARGE=40"),
+                o -> o instanceof String);
+
+        // ---- Misc ----
+        lifetimeSeconds   = B.comment(
+                "How long the orb lasts on the ground, in seconds."
+        ).defineInRange("lifetimeSeconds", 30, 1, 3_600);
+
+        allowPvP          = B.comment(
+                "If true, players can drop orbs when they die (PvP or other causes)."
+        ).define("allowPvP", false);
+
+        whitelistIds      = B.comment(
+                "Only these entity IDs are allowed to drop orbs (if list is NOT empty).",
+                "If you put any entries here, only those will drop."
+        ).defineListAllowEmpty("whitelistEntities", List.of(), o -> o instanceof String);
+
+        blacklistIds      = B.comment(
+                "Entities that must NOT drop orbs (overrides whitelist if both are set)."
+        ).defineListAllowEmpty("blacklistEntities", List.of(), o -> o instanceof String);
+
+        // ---- Optional light ----
+        spawnLights = B.comment(
+                "If true, spawn a small light where the soul orb appears (cosmetic)."
+        ).define("spawnLights", true);
+
         lightRadiusBlocks = B.comment(
-                        "Approximate light radius in blocks around the soul's light. 0 = no light.",
-                        "The placed light level is roughly radius+1 (clamped to 15).")
-                .defineInRange("lightRadiusBlocks", 3, 0, 14);
+                "Approximate radius of the placed light (in blocks).",
+                "0 = no light. The block light level is roughly radius+1 (max 15)."
+        ).defineInRange("lightRadiusBlocks", 3, 0, 14);
 
         B.pop();
     }
 
-    /** Called from UpgradeServerConfig's static init to attach this section to the single SPEC builder. */
     public static SoulsConfigSpec define(ModConfigSpec.Builder B) {
         return new SoulsConfigSpec(B);
     }
 
-    /** Immutable snapshot consumed by UpgradeServerConfig (adapted into its SoulsConfig). */
     public static final class Snapshot {
         public final boolean enabled;
         public final double  dropChance;
@@ -113,7 +140,7 @@ public final class SoulsConfigSpec {
         public final Set<ResourceLocation> whitelist;
         public final Set<ResourceLocation> blacklist;
 
-        // NEW: lights
+        // Lights
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
 
@@ -139,7 +166,6 @@ public final class SoulsConfigSpec {
         }
     }
 
-    /** Build a live snapshot (uses same logic as the original single-file version). */
     public Snapshot snapshot() {
         double chance = clamp01(dropChance.get());
 

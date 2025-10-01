@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/attributes/AttributesConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import net.minecraft.resources.ResourceLocation;
@@ -11,19 +10,22 @@ import org.z2six.infiniteupgrades.config.UpgradeServerConfig.StepType;
 import java.util.*;
 
 /**
- * Attributes section:
- * - Defines default attribute rules under "attributes.{namespace}.{group}.{name}"
- * - Defines dynamic rules under "attributesDynamic.rules"
- * - Produces a unified list of AttributeRuleConfig (same class as original).
+ * User-facing attribute tuning.
  *
- * Logic preserved from the original UpgradeServerConfig.
+ * This section controls how EACH attribute upgrades:
+ * - Direction (INCREASE or DECREASE)
+ * - Step type (PERCENT or ADDITIVE)
+ * - Default step size (+ per-level overrides)
+ * - Caps, rounding, and a few special flags
+ *
+ * Also supports extra custom rules for ANY attribute id (including modded) via `attributesDynamic.rules`.
  */
 public final class AttributesConfigSpec {
 
-    // Dynamic rule input
+    // Lines that define additional rules (or override built-ins) in a simple one-line format
     public final ModConfigSpec.ConfigValue<List<? extends String>> customAttrRules;
 
-    // Default sections (same as before)
+    // Built-in sections for common attributes (as easy starting points)
     private final AttributeSection ATTACK_DAMAGE;
     private final AttributeSection ATTACK_SPEED;
     private final AttributeSection ARMOR;
@@ -31,7 +33,7 @@ public final class AttributesConfigSpec {
     private final AttributeSection KNOCKBACK_RESISTANCE;
 
     private AttributesConfigSpec(ModConfigSpec.Builder B) {
-        // Default attribute sections (exact parameters preserved)
+        // ====== Built-in examples / defaults ======
         ATTACK_DAMAGE = new AttributeSection(B, "minecraft", "generic", "attack_damage",
                 true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
                 List.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY,
@@ -57,17 +59,36 @@ public final class AttributesConfigSpec {
                 List.of(), 0.0, 1.0,
                 false, 0.0);
 
-        // Dynamic rules input (same path/format)
+        // ====== Dynamic rules (simple one-line format) ======
         B.push("attributesDynamic");
         customAttrRules = B.comment(
-                "Add custom attribute rules (ANY attribute id) – one rule per line.",
-                "Format (semicolon-separated; first token can be the id unless you use id=...):",
-                "  minecraft:generic.max_health; enabled=true; weight=8; direction=INCREASE; stepType=ADDITIVE; defaultStep=1.0; capMin=0; capMax=2048; applyToMagnitude=false; rounding=0.0; overrides=5:2.0,10:5.0",
-                "Tokens (all optional except id): enabled, weight, direction, stepType, defaultStep, overrides, capMin, capMax, applyToMagnitude, rounding",
-                "Examples:",
-                "  minecraft:generic.max_health; stepType=ADDITIVE; defaultStep=2.0; weight=6; capMin=0; capMax=2048",
-                "  coolmod:magic_damage; stepType=PERCENT; direction=INCREASE; defaultStep=0.03; weight=12; rounding=0.01",
-                "  minecraft:generic.attack_speed; stepType=PERCENT; direction=DECREASE; defaultStep=0.05; applyToMagnitude=true"
+                "Add or override attribute rules with simple one-line entries.",
+                "",
+                "► How steps combine:",
+                "   final_step_for_this_upgrade = (rule step here) × (ritual multiplier) .",
+                "   - The 'rule step' comes from per-level override (if present) otherwise 'defaultStep'.",
+                "   - Ritual multipliers are set in: rituals.angelStepMultiplier / rituals.demonStepMultiplier.",
+                "",
+                "► PERCENT vs ADDITIVE:",
+                "   - PERCENT: 0.05 means +5% (or -5% if direction=DECREASE).",
+                "   - ADDITIVE: 1.0 means +1.0 (or -1.0 if direction=DECREASE).",
+                "",
+                "► Format (semicolon-separated). The id can be the first token, or use id=...:",
+                "   minecraft:generic.max_health; enabled=true; weight=8; direction=INCREASE; stepType=ADDITIVE; defaultStep=2.0; capMin=0; capMax=2048; applyToMagnitude=false; rounding=0.01; overrides=5:4.0,10:6.0",
+                "",
+                "► Tokens (all optional except id):",
+                "   enabled, weight, direction(INCREASE|DECREASE), stepType(PERCENT|ADDITIVE), defaultStep,",
+                "   overrides (comma list of L:value), capMin, capMax, applyToMagnitude(true/false), rounding",
+                "",
+                "► Examples:",
+                "   1) minecraft:generic.max_health; stepType=ADDITIVE; defaultStep=2.0; capMin=0; capMax=2048",
+                "      (Every upgrade adds 2 hearts unless capped; ritual multiplier still applies.)",
+                "",
+                "   2) coolmod:magic_damage; stepType=PERCENT; direction=INCREASE; defaultStep=0.03; rounding=0.01",
+                "      (+3% per upgrade (× ritual multiplier), rounded to 0.01.)",
+                "",
+                "   3) minecraft:generic.attack_speed; stepType=PERCENT; direction=DECREASE; defaultStep=0.05; applyToMagnitude=true",
+                "      (Treats negative bases correctly so it feels like “faster” in-game.)"
         ).defineListAllowEmpty("rules", List.of(), o -> o instanceof String);
         B.pop();
     }
@@ -76,6 +97,7 @@ public final class AttributesConfigSpec {
         return new AttributesConfigSpec(B);
     }
 
+    /** Runtime snapshot used by the server logic. */
     public static final class Snapshot {
         public final List<UpgradeServerConfig.AttributeRuleConfig> rules;
 
@@ -96,9 +118,9 @@ public final class AttributesConfigSpec {
         return new Snapshot(Collections.unmodifiableList(attrs));
     }
 
-    // --------- Internal: identical logic to original AttributeSection & dynamic rule parsing ---------
+    // ---------- Internal (unchanged logic) ----------
 
-    /** Mirrors original nested AttributeSection; produces UpgradeServerConfig.AttributeRuleConfig. */
+    /** Produces a rule config for one attribute under attributes.{namespace}.{group}.{name}. */
     private static final class AttributeSection {
         private final String ns;
         private final String grp;
@@ -127,25 +149,48 @@ public final class AttributesConfigSpec {
             B.push(group);
             B.push(name);
 
-            enabled = B.comment("Enable rule for " + namespace + ":" + group + "." + name)
+            enabled = B.comment(
+                            "Enable or disable upgrades for this attribute entirely.")
                     .define("enabled", defEnabled);
-            weight = B.comment("Random selection weight (ignored if mode=ALL).")
+
+            weight = B.comment(
+                            "Random selection weight when only ONE attribute is chosen to upgrade (RANDOM mode).",
+                            "Higher weight = chosen more often. Ignored if ALL attributes upgrade together.")
                     .defineInRange("weight", defWeight, 0, 1000);
-            direction = B.comment("INCREASE or DECREASE.")
+
+            direction = B.comment(
+                            "INCREASE → positive step (buff).  DECREASE → negative step (nerf).",
+                            "Tip: For attack_speed, using DECREASE with applyToMagnitude=true makes the weapon",
+                            "feel faster (because the base is negative).")
                     .defineEnum("direction", defDir);
-            stepType = B.comment("PERCENT or ADDITIVE.")
+
+            stepType = B.comment(
+                            "PERCENT: step=0.05 → ±5%.  ADDITIVE: step=1.0 → ±1.0.")
                     .defineEnum("stepType", defStepType);
-            defaultStep = B.comment("Default step (fraction for PERCENT, absolute for ADDITIVE).")
+
+            defaultStep = B.comment(
+                            "Default step size. If PERCENT, it is a fraction (0.05 = 5%). If ADDITIVE, it is absolute.")
                     .defineInRange("defaultStep", defStep, -1_000_000.0, 1_000_000.0);
-            perLevelOverrides = B.comment("Overrides per current level, format: \"level=value\".")
+
+            perLevelOverrides = B.comment(
+                            "Overrides for *current level*. Format: \"level=value\". Example: [\"5=0.10\",\"10=0.15\"].",
+                            "If set, the override value replaces defaultStep at that level. Otherwise defaultStep is used.")
                     .defineListAllowEmpty("perLevelOverrides", defOverrides, o -> o instanceof String);
-            capMin = B.comment("Minimum cap (after applying steps).")
+
+            capMin = B.comment(
+                            "Lower cap for the final value AFTER the step is applied.")
                     .defineInRange("capMin", defMin, -1_000_000.0, 1_000_000.0);
-            capMax = B.comment("Maximum cap (after applying steps).")
+
+            capMax = B.comment(
+                            "Upper cap for the final value AFTER the step is applied.")
                     .defineInRange("capMax", defMax, -1_000_000.0, 1_000_000.0);
-            applyToMagnitude = B.comment("If true, apply percent to |value| magnitude (useful for attack_speed).")
+
+            applyToMagnitude = B.comment(
+                            "PERCENT only: apply percent to |value| magnitude (helps when the base is negative).")
                     .define("applyToMagnitude", defApplyToMag);
-            rounding = B.comment("Rounding quantum (e.g. 0.01). 0 = no rounding.")
+
+            rounding = B.comment(
+                            "Round the final value to a grid. Example: 0.01 → two decimals. 0 = no rounding.")
                     .defineInRange("rounding", defRound, 0.0, 1_000_000.0);
 
             B.pop(); B.pop(); B.pop(); B.pop();
@@ -168,8 +213,8 @@ public final class AttributesConfigSpec {
                         rounding.get()
                 );
             } catch (Throwable t) {
+                // Fallback mirrors original
                 ResourceLocation id = ResourceLocation.parse(ns + ":" + grp + "." + name);
-                // Fallback mirrors original .fallback()
                 return new UpgradeServerConfig.AttributeRuleConfig(
                         id, true, 1, Direction.INCREASE, StepType.PERCENT, 0.05,
                         Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0
@@ -237,7 +282,6 @@ public final class AttributesConfigSpec {
                 String t = tok.trim();
                 if (t.isEmpty()) continue;
 
-                // Non key=value token can serve as the id (first).
                 if (!t.contains("=") && idStr == null) {
                     idStr = t;
                     continue;

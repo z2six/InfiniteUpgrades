@@ -1,4 +1,3 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/general/GeneralConfigSpec.java
 package org.z2six.infiniteupgrades.config.sections;
 
 import com.mojang.logging.LogUtils;
@@ -11,8 +10,7 @@ import org.z2six.infiniteupgrades.config.UpgradeServerConfig.UpgradeMode;
 import java.util.List;
 
 /**
- * General section: maxLevel, upgradeMode, nameColorRules + helpers.
- * Logic preserved from the original UpgradeServerConfig.
+ * General knobs that affect the whole system.
  */
 public final class GeneralConfigSpec {
     private static final Logger LOG = LogUtils.getLogger();
@@ -25,18 +23,29 @@ public final class GeneralConfigSpec {
     private GeneralConfigSpec(ModConfigSpec.Builder B) {
         B.push("general");
 
-        maxLevel = B.comment("Maximum enhancement level.")
+        maxLevel = B.comment(
+                        "Maximum enhancement level an item can reach. Set to 0 to effectively disable upgrades.",
+                        "Example: 20 means +20 is the cap.")
                 .defineInRange("maxLevel", 20, 0, 1000);
 
-        upgradeMode = B.comment("Upgrade mode: RANDOM (pick one attribute) or ALL (apply all). (Legacy/global; ritual-specific logic overrides this)")
-                .defineEnum("upgradeMode", UpgradeMode.RANDOM);
+        upgradeMode = B.comment(
+                "How to apply attribute upgrades when an attempt succeeds:",
+                " - RANDOM: pick ONE attribute (uses 'weight' values from attribute rules).",
+                " - ALL:    apply the step to ALL eligible attributes.",
+                "",
+                "Note: Some ritual-specific logic may override this choice."
+        ).defineEnum("upgradeMode", UpgradeMode.RANDOM);
 
         nameColorRules = B.comment(
-                        "Name color tiers by level. Formats: 'A-B=color', 'A+=color', or 'N=color'.",
-                        "Default: [\"1-4=blue\",\"5-9=light_purple\",\"10+=gold\"]")
-                .defineListAllowEmpty("nameColorRules",
-                        List.of("1-4=blue", "5-9=light_purple", "10+=gold"),
-                        o -> o instanceof String);
+                "Color the item's name based on its +level. Format examples:",
+                " - \"A-B=color\"  (range),  e.g. \"1-4=blue\"",
+                " - \"A+=color\"   (A or higher), e.g. \"10+=gold\"",
+                " - \"N=color\"    (exact level), e.g. \"7=green\"",
+                "Colors: https://minecraft.fandom.com/wiki/Formatting_codes",
+                "Default: [\"1-4=blue\",\"5-9=light_purple\",\"10+=gold\"]"
+        ).defineListAllowEmpty("nameColorRules",
+                List.of("1-4=blue", "5-9=light_purple", "10+=gold"),
+                o -> o instanceof String);
 
         B.pop();
     }
