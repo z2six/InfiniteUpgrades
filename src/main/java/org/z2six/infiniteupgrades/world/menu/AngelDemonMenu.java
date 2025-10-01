@@ -25,6 +25,7 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
+import org.z2six.infiniteupgrades.capability.ModAttachments; // <-- ADDED
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.Reputation;
 import org.z2six.infiniteupgrades.logic.RitualType;
@@ -108,7 +109,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
     private int previewChancePermille = 0;
 
     // ---- Ritual context ----
-    private RitualType ritual = RitualType.ANGEL; // default
+    private RitualType ritual = RitualType.ANGEL; // default (will be set properly in buf ctor)
     private BlockPos anchorPos = BlockPos.ZERO;
 
     // ---- Server-authoritative pending infusion state (timer) ----
@@ -122,8 +123,12 @@ public class AngelDemonMenu extends AbstractContainerMenu {
     private long clientLockEndGameTime = -1L; // received via S2C; UI reads this for animation/lock
     private int clientLockDurationTicks = 0;
 
+    // ---- ADDED: keep the owner for server-side attachment I/O ----
+    private final Player owner;
+
     public AngelDemonMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
+        this.owner = inv.player; // <-- ADDED
         try {
             // Inputs
             this.addSlot(new Slot(baseInv, 0, INPUT1_X, INPUT1_Y) {
@@ -180,7 +185,8 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                         HOTBAR_Y));
             }
 
-            // Initial preview
+            // IMPORTANT: DO NOT load attachments here — ritual is not known yet.
+            // Initial preview (safe regardless of ritual)
             updatePreview();
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] ctor failed: {}", t.toString());
@@ -208,6 +214,13 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 }
             }
             LOG.debug("[AngelDemonMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
+
+            // --- Now that ritual is known: load saved attachment state (server only) ---
+            if (this.owner != null && !this.owner.level().isClientSide) {
+                loadSlotsFromAttachmentServer();
+                // sync to client so it sees the loaded items
+                syncToClient("load attachment on open (after ritual known)");
+            }
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
         }
@@ -225,6 +238,12 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         super.slotsChanged(container);
         LOG.debug("[AngelDemonMenu] slotsChanged: in={}, res={}, out={}, realOut={} (ritual={})",
                 baseInv.getItem(0), baseInv.getItem(1), baseInv.getItem(2), hasRealResult(), ritual);
+
+        // --- Persist to attachment on the server whenever slots change ---
+        if (owner != null && !owner.level().isClientSide) {
+            persistSlotsToAttachmentServer();
+        }
+
         updatePreview();
     }
 
@@ -383,6 +402,11 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 // No preview while a real result is present
             }
 
+            // Persist after finalize (server)
+            if (owner != null && !owner.level().isClientSide) {
+                persistSlotsToAttachmentServer();
+            }
+
             syncToClient("infuse finalize");
 
             // Notify client: result ready (unlock UI etc.)
@@ -445,7 +469,7 @@ public class AngelDemonMenu extends AbstractContainerMenu {
         }
     }
 
-    // ---- Lifecycle: return inputs when the menu closes -----------------------------------------
+    // ---- Lifecycle: persist items when the menu closes -----------------------------------------
 
     @Override
     public void removed(Player player) {
@@ -474,11 +498,21 @@ public class AngelDemonMenu extends AbstractContainerMenu {
                 withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
             }
 
-            // Return everything else (including a REAL result if present)
-            this.clearContainer(player, baseInv);
-            LOG.debug("[AngelDemonMenu] Menu closed; returned items (ritual={})", ritual);
+            // Persist items into the attachment (server), do NOT return to player
+            if (player != null && !player.level().isClientSide) {
+                persistSlotsToAttachmentServer();
+            }
+
+            // Clear the menu's internal slots so there is no duplication when reopened
+            withPreviewSuppressed(() -> {
+                baseInv.setItem(0, ItemStack.EMPTY);
+                baseInv.setItem(1, ItemStack.EMPTY);
+                baseInv.setItem(2, ItemStack.EMPTY);
+            });
+
+            LOG.debug("[AngelDemonMenu] Menu closed; items persisted (ritual={})", ritual);
         } catch (Throwable t) {
-            LOG.error("[AngelDemonMenu] removed() failed to clear/return items: {}", t.toString());
+            LOG.error("[AngelDemonMenu] removed() failed to persist/clear items: {}", t.toString());
         }
     }
 
@@ -727,4 +761,44 @@ public class AngelDemonMenu extends AbstractContainerMenu {
 
     public long getClientLockEndGameTime() { return clientLockEndGameTime; }
     public int getClientLockDurationTicks() { return clientLockDurationTicks; }
+
+    // ========================== ADDED: Attachment persistence helpers (server) ==========================
+
+    /** Persist current menu slots into the player's ritual attachment (server only). */
+    private void persistSlotsToAttachmentServer() {
+        if (owner == null || owner.level().isClientSide) return;
+
+        var type = (ritual == RitualType.ANGEL)
+                ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
+                : ModAttachments.DEMON_RITUAL_SLOTS.get();
+
+        ItemStack s0 = baseInv.getItem(0).copy();
+        ItemStack s1 = baseInv.getItem(1).copy();
+        ItemStack s2 = baseInv.getItem(2).copy();
+        // Never persist a ghost preview
+        if (isPreview(s2)) s2 = ItemStack.EMPTY;
+
+        owner.setData(type, new ModAttachments.RitualSlots(s0, s1, s2));
+        LOG.debug("[AngelDemonMenu] Persisted ritual slots to attachment ({})", ritual);
+    }
+
+    /** Load saved ritual slots from the player's attachment into the menu (server only). */
+    private void loadSlotsFromAttachmentServer() {
+        if (owner == null || owner.level().isClientSide) return;
+
+        var type = (ritual == RitualType.ANGEL)
+                ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
+                : ModAttachments.DEMON_RITUAL_SLOTS.get();
+
+        ModAttachments.RitualSlots saved = owner.getData(type);
+        if (saved == null) return;
+
+        // Fill slots with copies; do not trigger preview loops
+        withPreviewSuppressed(() -> {
+            baseInv.setItem(0, saved.s0().copy());
+            baseInv.setItem(1, saved.s1().copy());
+            baseInv.setItem(2, saved.s2().copy());
+        });
+        LOG.debug("[AngelDemonMenu] Loaded ritual slots from attachment ({})", ritual);
+    }
 }

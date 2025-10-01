@@ -40,6 +40,8 @@ import org.z2six.infiniteupgrades.registry.ModMenus;
 import org.z2six.infiniteupgrades.world.AngelEntity;
 import org.z2six.infiniteupgrades.world.DemonEntity;
 import org.z2six.infiniteupgrades.world.SigilBlock;
+// NEW: attachments registration
+import org.z2six.infiniteupgrades.capability.ModAttachments;
 
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
@@ -89,6 +91,9 @@ public class Infiniteupgrades {
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
         ModMenus.MENUS.register(modEventBus);
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
+
+        // ✅ Register attachment types on the MOD event bus (this was missing)
+        ModAttachments.register(modEventBus);
 
         // Listen to common-bus gameplay events (ServerStartingEvent below)
         NeoForge.EVENT_BUS.register(this);
