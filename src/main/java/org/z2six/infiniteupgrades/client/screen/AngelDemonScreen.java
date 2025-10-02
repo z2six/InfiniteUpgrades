@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelDemonScreen.java
 package org.z2six.infiniteupgrades.client.screen;
 
 import com.mojang.logging.LogUtils;
@@ -127,6 +128,9 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
         // Ask the server for the current reputation snapshot
         ModNet.requestRepSnapshot();
+
+        // >>> NEW: ask the server for any pending infusion state (resume lock/animation after reopen)
+        ModNet.requestPendingState();
 
         // Ensure details starts fresh
         if (detailsView != null) detailsView.markDirty();

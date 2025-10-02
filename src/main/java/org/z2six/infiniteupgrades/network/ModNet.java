@@ -12,13 +12,11 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.logic.PendingStore;
 import org.z2six.infiniteupgrades.logic.Reputation;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
-/**
- * Network registration + helpers for reputation sync and infusion S2C notifications.
- */
-@EventBusSubscriber(modid = Infiniteupgrades.MODID) // default MOD bus; 'bus' param deprecated on NeoForge 1.21.1
+@EventBusSubscriber(modid = Infiniteupgrades.MODID)
 public final class ModNet {
     private static final Logger LOG = LogUtils.getLogger();
 
@@ -28,20 +26,15 @@ public final class ModNet {
     public static void register(final RegisterPayloadHandlersEvent event) {
         var reg = event.registrar(Infiniteupgrades.MODID);
 
-        // --- Reputation messages ---
-
-        // Client -> Server: request snapshot
+        // -------- Reputation --------
         reg.playToServer(RepRequestC2S.TYPE, RepRequestC2S.STREAM_CODEC, (payload, ctx) -> {
             var p = ctx.player();
-            if (!(p instanceof ServerPlayer sp)) {
-                return;
-            }
+            if (!(p instanceof ServerPlayer sp)) return;
             double unified = Reputation.get(sp);
             int repMax = Math.max(1, UpgradeServerConfig.snapshot().repMax);
             PacketDistributor.sendToPlayer(sp, new RepSnapshotS2C(unified, repMax));
         });
 
-        // Server -> Client: deliver snapshot
         reg.playToClient(RepSnapshotS2C.TYPE, RepSnapshotS2C.STREAM_CODEC, (payload, ctx) -> {
             ctx.enqueueWork(() -> {
                 try {
@@ -56,14 +49,12 @@ public final class ModNet {
             });
         });
 
-        // --- Infusion S2C messages (timer + result) ---
-
+        // -------- Infusion lifecycle --------
         reg.playToClient(InfuseStartedS2C.TYPE, InfuseStartedS2C.STREAM_CODEC, (payload, ctx) -> {
             ctx.enqueueWork(() -> {
                 try {
                     var mc = Minecraft.getInstance();
                     if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
-                        // We purposefully do not rely on containerId here; one container at a time per player.
                         menu.clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
                         LOG.debug("[ModNet] S2C InfuseStarted: endTime={} durationTicks={}", payload.endGameTime(), payload.durationTicks());
                     }
@@ -86,20 +77,58 @@ public final class ModNet {
                 }
             });
         });
+
+        // -------- Pending state / resume --------
+        reg.playToServer(PendingPollC2S.TYPE, PendingPollC2S.STREAM_CODEC, (payload, ctx) -> {
+            var p = ctx.player();
+            if (!(p instanceof ServerPlayer sp)) return;
+
+            var s = PendingStore.read(sp);
+            if (sp.containerMenu instanceof AngelDemonMenu menu) {
+                long now = sp.level().getGameTime();
+                boolean outcomeKnown = false;
+                if (s.active() && s.duration() > 0) {
+                    int finaleTicks = Math.max(10, Math.min(80, (int) Math.round(s.duration() * 0.15)));
+                    long finaleThreshold = s.end() - Math.max(1, finaleTicks);
+                    outcomeKnown = (now >= finaleThreshold && now < s.end());
+                }
+                PacketDistributor.sendToPlayer(sp, new PendingStateS2C(
+                        menu.containerId,
+                        s.active(),
+                        s.end(),
+                        s.duration(),
+                        outcomeKnown,
+                        s.success()
+                ));
+            }
+        });
+
+        reg.playToClient(PendingStateS2C.TYPE, PendingStateS2C.STREAM_CODEC, (payload, ctx) -> {
+            ctx.enqueueWork(() -> {
+                var mc = Minecraft.getInstance();
+                if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
+                    menu.clientOnPendingState(payload);
+                }
+            });
+        });
+
+        // Early outcome (visual)
+        reg.playToClient(EarlyOutcomeS2C.TYPE, EarlyOutcomeS2C.STREAM_CODEC, (payload, ctx) -> {
+            ctx.enqueueWork(() -> {
+                var mc = Minecraft.getInstance();
+                if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
+                    menu.clientOnEarlyOutcome(payload.willSucceed());
+                }
+            });
+        });
     }
 
-    // --- Helpers ---
-
-    /** Client call: request current reputation values from the server. */
+    // -------- Public helpers --------
     public static void requestRepSnapshot() {
-        try {
-            PacketDistributor.sendToServer(RepRequestC2S.INSTANCE);
-        } catch (Throwable t) {
-            LOG.error("[ModNet] Failed to send RepRequestC2S", t);
-        }
+        try { PacketDistributor.sendToServer(RepRequestC2S.INSTANCE); }
+        catch (Throwable t) { LOG.error("[ModNet] Failed to send RepRequestC2S", t); }
     }
 
-    /** Server call: push a fresh snapshot to a specific player. */
     public static void sendRepSnapshotTo(ServerPlayer sp) {
         try {
             double unified = Reputation.get(sp);
@@ -110,21 +139,23 @@ public final class ModNet {
         }
     }
 
-    /** Server call: notify client that an infusion attempt has started with a delay. */
     public static void sendInfuseStartedTo(ServerPlayer sp, int containerId, long endGameTime, int durationTicks) {
-        try {
-            PacketDistributor.sendToPlayer(sp, new InfuseStartedS2C(containerId, endGameTime, durationTicks));
-        } catch (Throwable t) {
-            LOG.error("[ModNet] Failed to send InfuseStartedS2C to {}", sp, t);
-        }
+        try { PacketDistributor.sendToPlayer(sp, new InfuseStartedS2C(containerId, endGameTime, durationTicks)); }
+        catch (Throwable t) { LOG.error("[ModNet] Failed to send InfuseStartedS2C to {}", sp, t); }
     }
 
-    /** Server call: notify client that the infusion attempt finalized. */
     public static void sendInfuseResultTo(ServerPlayer sp, int containerId, boolean success) {
-        try {
-            PacketDistributor.sendToPlayer(sp, new InfuseResultS2C(containerId, success));
-        } catch (Throwable t) {
-            LOG.error("[ModNet] Failed to send InfuseResultS2C to {}", sp, t);
-        }
+        try { PacketDistributor.sendToPlayer(sp, new InfuseResultS2C(containerId, success)); }
+        catch (Throwable t) { LOG.error("[ModNet] Failed to send InfuseResultS2C to {}", sp, t); }
+    }
+
+    public static void requestPendingState() {
+        try { PacketDistributor.sendToServer(PendingPollC2S.INSTANCE); }
+        catch (Throwable t) { LOG.error("[ModNet] Failed to send PendingPollC2S", t); }
+    }
+
+    public static void sendEarlyOutcomeTo(ServerPlayer sp, boolean willSucceed) {
+        try { PacketDistributor.sendToPlayer(sp, new EarlyOutcomeS2C(willSucceed)); }
+        catch (Throwable t) { LOG.error("[ModNet] Failed to send EarlyOutcomeS2C to {}", sp, t); }
     }
 }

@@ -2,36 +2,54 @@
 package org.z2six.infiniteupgrades.logic;
 
 import com.mojang.logging.LogUtils;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.neoforge.event.tick.LevelTickEvent;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
 /**
- * GAME-bus tick listener that finalizes pending infusion attempts on the server.
- * Registered programmatically in Infiniteupgrades ctor via NeoForge.EVENT_BUS.addListener.
+ * Server tick hook that finalizes pending infusions.
+ * Registered from Infiniteupgrades ctor: NeoForge.EVENT_BUS.addListener(InfuseTimers::onLevelTick)
  */
 public final class InfuseTimers {
     private static final Logger LOG = LogUtils.getLogger();
 
     private InfuseTimers() {}
 
-    // Method signature matches the event type; no annotation needed when using addListener(...)
-    public static void onLevelTick(LevelTickEvent.Post evt) {
-        if (!(evt.getLevel() instanceof ServerLevel level)) return;
+    @SubscribeEvent
+    public static void onLevelTick(ServerTickEvent.Post evt) {
+        var server = evt.getServer();
+        if (server == null) return;
 
-        long now = level.getGameTime();
+        // Use overworld gameTime as the canonical clock (all dimensions tick together in SP/typical servers).
+        ServerLevel overworld = server.overworld();
+        if (overworld == null) return;
+        long now = overworld.getGameTime();
 
-        try {
-            for (ServerPlayer sp : level.players()) {
-                if (sp == null) continue;
+        for (ServerPlayer sp : server.getPlayerList().getPlayers()) {
+            try {
+                Boolean success = PendingStore.finalizeIfReady(sp, now);
+                if (success == null) continue; // not ready
+
+                // If their menu is open, mirror attachment->menu slot2 immediately
                 if (sp.containerMenu instanceof AngelDemonMenu menu) {
-                    menu.serverTickPending(now, sp);
+                    menu.serverPullResultFromAttachment();
+                    // Tell client to unlock/stop anim
+                    ModNet.sendInfuseResultTo(sp, menu.containerId, success);
+                } else {
+                    // Even if the menu isn't open, it's fine — result sits in the attachment until next open.
+                    if (success) {
+                        LOG.debug("[InfuseTimers] finalize: success for {}, menu closed", sp.getGameProfile().getName());
+                    } else {
+                        LOG.debug("[InfuseTimers] finalize: fail for {}, menu closed", sp.getGameProfile().getName());
+                    }
                 }
+            } catch (Throwable t) {
+                LOG.error("[InfuseTimers] finalize loop failed for {}", sp.getGameProfile().getName(), t);
             }
-        } catch (Throwable t) {
-            LOG.error("[InfuseTimers] onLevelTick failed: {}", t.toString());
         }
     }
 }
