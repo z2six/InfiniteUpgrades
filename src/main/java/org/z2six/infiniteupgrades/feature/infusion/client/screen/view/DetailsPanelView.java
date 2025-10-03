@@ -24,6 +24,7 @@ import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScree
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
 import org.z2six.infiniteupgrades.feature.infusion.logic.UpgradeService;
+import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
 
 import java.text.DecimalFormat;
 import java.util.*;
@@ -244,11 +245,27 @@ public final class DetailsPanelView {
     private void rebuildRows() {
         rows.clear();
 
-        // Subject item = slot 0 (input)
+        // Suppress ALL details during an active infusion lock.
+        if (isInfusionLocked()) {
+            contentHeight = 0.0;
+            clampScrollToContent();
+            return;
+        }
+
+        // Subject item:
+        // - Prefer slot 0 (input) if present.
+        // - Else, use slot 2 **only if it's a REAL (non-preview) result** after infusion.
         ItemStack subj = ItemStack.EMPTY;
         try {
             var menu = screen.getMenu();
-            subj = menu != null ? menu.getSlot(0).getItem() : ItemStack.EMPTY;
+            ItemStack s0 = menu != null ? menu.getSlot(0).getItem() : ItemStack.EMPTY;
+            ItemStack s2 = menu != null ? menu.getSlot(2).getItem() : ItemStack.EMPTY;
+
+            if (!s0.isEmpty()) {
+                subj = s0;
+            } else if (!s2.isEmpty() && !isPreview(s2)) {
+                subj = s2;
+            }
         } catch (Throwable ignored) {}
 
         final RitualType ritual = screen.getMenu().ritual();
@@ -306,15 +323,18 @@ public final class DetailsPanelView {
     // ----- Content builders -----
 
     private void buildTotals(ItemStack s, int width) {
-        var tot = readTotals(s);
+        Map<String, TotalsInfo> tot = readTotalsWithCounts(s);
         if (tot.isEmpty()) {
             addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
             return;
         }
         for (var e : tot.entrySet()) {
             String display = resolveAttrDisplayName(e.getKey());
-            double pct = e.getValue(); // fraction
-            String line = BULLET + display + " " + (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%";
+            double pct = e.getValue().sumPercent; // fraction
+            int count   = e.getValue().count;
+            String line = BULLET + display + " " +
+                    (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%" +
+                    " (+" + count + ")";
             addWrapped(line, ChatFormatting.GRAY, width);
         }
     }
@@ -560,8 +580,19 @@ public final class DetailsPanelView {
         return s.replace('_', ' ').replace('.', ' ');
     }
 
-    private Map<String, Double> readTotals(ItemStack s) {
-        Map<String, Double> out = new LinkedHashMap<>();
+    // --- Totals + counts ---
+
+    private static final class TotalsInfo {
+        final double sumPercent; // fraction
+        final int count;         // number of upgrades recorded
+        TotalsInfo(double sumPercent, int count) {
+            this.sumPercent = sumPercent;
+            this.count = count;
+        }
+    }
+
+    private Map<String, TotalsInfo> readTotalsWithCounts(ItemStack s) {
+        Map<String, TotalsInfo> out = new LinkedHashMap<>();
         try {
             CustomData cd = s.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
             if (cd == null) return out;
@@ -570,7 +601,8 @@ public final class DetailsPanelView {
             for (String key : totals.getAllKeys()) {
                 var a = totals.getCompound(key);
                 double sumPct = a.getDouble("sumPercent"); // fraction
-                out.put(key, sumPct);
+                int count = a.getInt("count");
+                out.put(key, new TotalsInfo(sumPct, Math.max(0, count)));
             }
         } catch (Throwable ignored) {}
         return out;
@@ -614,6 +646,25 @@ public final class DetailsPanelView {
     }
 
     private static String pct1(double frac) { return PCT1.format(frac * 100.0) + "%"; }
+
+    // --- New local helpers ---
+
+    private boolean isInfusionLocked() {
+        AngelDemonMenu menu = screen.getMenu();
+        if (menu == null) return false;
+        return menu.getClientLockEndGameTime() > 0L;
+    }
+
+    private static boolean isPreview(ItemStack stack) {
+        try {
+            if (stack.isEmpty()) return false;
+            CustomData cd = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+            if (cd == null) return false;
+            return cd.copyTag().getBoolean("iu_preview");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
 
     // -------------- Row struct ----------------
     private static final class Row {

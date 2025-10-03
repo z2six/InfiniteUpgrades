@@ -40,10 +40,6 @@ import java.util.regex.Pattern;
 public final class UpgradeService {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // ---------------------------------------------
-    // File path: src/main/java/org/z2six/infiniteupgrades/logic/UpgradeService.java
-    // ---------------------------------------------
-
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
     private UpgradeService() {}
@@ -291,12 +287,14 @@ public final class UpgradeService {
                             String opName = ev.getString("op");
                             long batchId = ev.getLong("batchId");
 
-                            // Subtract from totals
+                            // Subtract from totals (including count)  <<< FIX HERE
                             CompoundTag a = totals.getCompound(attrKey);
                             a.putDouble("sumDelta", a.getDouble("sumDelta") - delta);
                             a.putDouble("sumPercent", a.getDouble("sumPercent") - stepPct);
                             a.putDouble("lastDelta", -delta);
                             a.putDouble("lastPercent", -stepPct);
+                            int c = a.getInt("count");
+                            if (c > 0) a.putInt("count", c - 1);
                             totals.put(attrKey, a);
 
                             // Append explicit downgrade event, link back to the same batchId for traceability
@@ -372,6 +370,15 @@ public final class UpgradeService {
                 CompoundTag r = tag.getCompound("iu_upgrade");
                 r.putInt("level", fNewLevel);
 
+                // <<< FIX: conservatively decrement counts by 1 (if >0) for all tracked attributes
+                CompoundTag totals = r.getCompound("totals");
+                for (String key : totals.getAllKeys()) {
+                    CompoundTag a = totals.getCompound(key);
+                    int c = a.getInt("count");
+                    if (c > 0) a.putInt("count", c - 1);
+                    totals.put(key, a);
+                }
+
                 ListTag history = r.getList("history", Tag.TAG_COMPOUND);
                 CompoundTag ev = new CompoundTag();
                 ev.putLong("time", System.currentTimeMillis());
@@ -386,6 +393,7 @@ public final class UpgradeService {
                 ev.putLong("batchId", 0L);
                 history.add(ev);
 
+                r.put("totals", totals);
                 r.put("history", history);
                 tag.put("iu_upgrade", r);
             });

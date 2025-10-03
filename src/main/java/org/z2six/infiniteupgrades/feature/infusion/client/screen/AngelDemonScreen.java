@@ -50,6 +50,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
+    // NEW: also obfuscate parentheses segments like "(+20%)" for the preview tooltip
+    private static final Pattern PARENS   = Pattern.compile("\\([^)]*\\)");
 
     private MainGuiView mainView;
     private DetailsPanelView detailsView;
@@ -129,7 +131,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Ask the server for the current reputation snapshot
         ModNet.requestRepSnapshot();
 
-        // >>> NEW: ask the server for any pending infusion state (resume lock/animation after reopen)
+        // Resume any pending infusion lock/animation after reopen
         ModNet.requestPendingState();
 
         // Ensure details starts fresh
@@ -298,7 +300,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
             Matcher m = LEADING_NUM.matcher(raw);
             if (!m.find()) {
-                out.add(obfuscateBracketsOnly(raw));
+                out.add(obfuscateBracketsAndParensOnly(raw));
                 continue;
             }
 
@@ -308,24 +310,37 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
             MutableComponent rebuilt = Component.literal("")
                     .append(Component.literal(num).withStyle(ChatFormatting.OBFUSCATED))
                     .append(Component.literal(" "))
-                    .append(obfuscateBracketSegments(rest));
+                    .append(obfuscateBracketAndParenSegments(rest));
 
             out.add(rebuilt);
         }
         return out;
     }
 
-    private static MutableComponent obfuscateBracketSegments(String text) {
+    /** Obfuscate all [...] and (...) segments in order, preserving the rest. */
+    private static MutableComponent obfuscateBracketAndParenSegments(String text) {
+        // Collect all ranges for [] and ()
+        class Range { final int s, e; Range(int s, int e){ this.s=s; this.e=e; } }
+        List<Range> ranges = new ArrayList<>();
+
+        Matcher bm = BRACKETS.matcher(text);
+        while (bm.find()) ranges.add(new Range(bm.start(), bm.end()));
+
+        Matcher pm = PARENS.matcher(text);
+        while (pm.find()) ranges.add(new Range(pm.start(), pm.end()));
+
+        // Sort by start index
+        ranges.sort((a,b) -> Integer.compare(a.s, b.s));
+
         MutableComponent result = Component.literal("");
         int idx = 0;
-        Matcher bm = BRACKETS.matcher(text);
-        while (bm.find()) {
-            if (bm.start() > idx) {
-                result = result.append(Component.literal(text.substring(idx, bm.start())));
+        for (Range r : ranges) {
+            if (r.s > idx) {
+                result = result.append(Component.literal(text.substring(idx, r.s)));
             }
-            String seg = text.substring(bm.start(), bm.end());
+            String seg = text.substring(r.s, r.e);
             result = result.append(Component.literal(seg).withStyle(ChatFormatting.OBFUSCATED));
-            idx = bm.end();
+            idx = r.e;
         }
         if (idx < text.length()) {
             result = result.append(Component.literal(text.substring(idx)));
@@ -333,8 +348,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         return result;
     }
 
-    private static MutableComponent obfuscateBracketsOnly(String text) {
-        return obfuscateBracketSegments(text);
+    private static MutableComponent obfuscateBracketsAndParensOnly(String text) {
+        return obfuscateBracketAndParenSegments(text);
     }
 
     private static boolean isPreview(ItemStack stack) {
