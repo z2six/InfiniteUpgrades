@@ -214,20 +214,21 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         try {
             if (player == null || player.level().isClientSide) return;
 
-            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                ItemStack existingOut = baseInv.getItem(2);
-                if (!existingOut.isEmpty() && !isPreview(existingOut)) {
-                    org.z2six.infiniteupgrades.feature.infusion.logic.AutoClaimService.giveOrDrop(sp, existingOut.copy());
-                    withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
-                    persistSlotsToAttachmentServer();
-                    syncToClient("auto-claimed lingering output on new infusion");
-                    updatePreview(); // optional but harmless
-                }
-            }
+            // Decide which slot provides the input:
+            // - Prefer slot 0 (normal flow).
+            // - If slot 0 is empty AND slot 2 holds a real (non-preview) result that is a valid combat item,
+            //   we allow chain-infusing directly from slot 2.
+            ItemStack in0  = baseInv.getItem(0);
+            ItemStack out2 = baseInv.getItem(2);
 
-            ItemStack in  = baseInv.getItem(0);
-            ItemStack res = baseInv.getItem(1);
-            if (in.isEmpty() || !isCombatItem(in)) return;
+            boolean outputIsReal = !out2.isEmpty() && !isPreview(out2);
+            boolean useOutputAsInput = in0.isEmpty() && outputIsReal && isCombatItem(out2);
+
+            ItemStack effectiveIn = useOutputAsInput ? out2 : in0;
+            ItemStack res         = baseInv.getItem(1);
+
+            // Usual guards
+            if (effectiveIn.isEmpty() || !isCombatItem(effectiveIn)) return;
             if (res.isEmpty() || !res.is(Items.IRON_INGOT)) return;
 
             // Is there already a server pending?
@@ -238,20 +239,26 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
 
             // Snapshot original and remove access immediately
-            ItemStack originalCopy = in.copy();
-            int cur = readLevelFromTagOrName(in);
+            ItemStack originalCopy = effectiveIn.copy();
+            int cur = readLevelFromTagOrName(effectiveIn);
 
             // Chance model + rep
-            double baseChance = UpgradeService.getSuccessChance(cur);
-            double bonus = Reputation.computeBonusFor(player, ritual);
+            double baseChance  = UpgradeService.getSuccessChance(cur);
+            double bonus       = Reputation.computeBonusFor(player, ritual);
             double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
 
             // Consume resource now
             res.shrink(1);
             baseInv.setItem(1, res);
 
-            // Remove original from slot (server authority)
-            withPreviewSuppressed(() -> baseInv.setItem(0, ItemStack.EMPTY));
+            // Remove the source item from whichever slot we used (server authority)
+            withPreviewSuppressed(() -> {
+                if (useOutputAsInput) {
+                    baseInv.setItem(2, ItemStack.EMPTY);
+                } else {
+                    baseInv.setItem(0, ItemStack.EMPTY);
+                }
+            });
 
             // Roll deterministically (server-only)
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
@@ -281,7 +288,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 // Let client lock/animate
                 if (delayTicks > 0) {
                     ModNet.sendInfuseStartedTo(sp, this.containerId, end, delayTicks);
-
                     // NEW: tell the client the outcome right now so it can time effects locally
                     ModNet.sendEarlyOutcomeTo(sp, success);
                 } else {
@@ -290,14 +296,15 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     ModNet.sendInfuseResultTo(sp, this.containerId, success);
                 }
 
-                // Persist slots after changes
+                // Persist slots after changes (reflects that we consumed resource and removed the used input slot)
                 persistSlotsToAttachmentServer();
 
-                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={}",
+                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (used {} as input)",
                         cur, ritual,
                         String.format("%.3f", baseChance), String.format("%.3f", bonus),
                         String.format("%.3f", finalChance), String.format("%.5f", roll),
-                        success, delayTicks);
+                        success, delayTicks,
+                        useOutputAsInput ? "slot2" : "slot0");
             }
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] onInfuseButtonPressed failed: {}", t.toString());
