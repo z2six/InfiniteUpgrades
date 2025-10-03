@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/logic/AttemptRng.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/AttemptRng.java
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import net.minecraft.core.BlockPos;

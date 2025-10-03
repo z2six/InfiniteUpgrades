@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/logic/RepEvents.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/reputation/logic/RepEvents.java
 
 package org.z2six.infiniteupgrades.feature.reputation.logic;
 

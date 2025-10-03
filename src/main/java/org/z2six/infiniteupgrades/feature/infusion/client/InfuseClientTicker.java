@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/InfuseClientTicker.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/InfuseClientTicker.java
 package org.z2six.infiniteupgrades.feature.infusion.client;
 
 import net.neoforged.neoforge.client.event.ClientTickEvent;

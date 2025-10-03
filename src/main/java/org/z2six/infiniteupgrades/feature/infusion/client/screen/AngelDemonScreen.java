@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/screen/AngelDemonScreen.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/AngelDemonScreen.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen;
 
 import com.mojang.logging.LogUtils;

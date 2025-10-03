@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/logic/dto/UpgradeOutcome.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/dto/UpgradeOutcome.java
 package org.z2six.infiniteupgrades.feature.infusion.logic.dto;
 
 import net.minecraft.resources.ResourceLocation;

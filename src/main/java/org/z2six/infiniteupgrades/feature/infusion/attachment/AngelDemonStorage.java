@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/capability/AngelDemonStorage.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/attachment/AngelDemonStorage.java
 package org.z2six.infiniteupgrades.feature.infusion.attachment;
 
 import net.minecraft.core.HolderLookup;

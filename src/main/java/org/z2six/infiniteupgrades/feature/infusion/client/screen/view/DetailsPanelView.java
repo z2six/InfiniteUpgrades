@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/DetailsPanelView.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;

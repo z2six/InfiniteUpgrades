@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/registry/ModMenus.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/registry/ModMenus.java
 package org.z2six.infiniteupgrades.core.registry;
 
 import com.mojang.logging.LogUtils;

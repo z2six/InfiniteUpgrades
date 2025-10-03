@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/client/AngelRenderer.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/angel/client/render/AngelRenderer.java
 package org.z2six.infiniteupgrades.feature.angel.client.render;
 
 import com.mojang.logging.LogUtils;

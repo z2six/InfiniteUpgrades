@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/commands/RepCommands.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/reputation/commands/RepCommands.java
 package org.z2six.infiniteupgrades.feature.reputation.commands;
 
 import com.mojang.brigadier.arguments.DoubleArgumentType;

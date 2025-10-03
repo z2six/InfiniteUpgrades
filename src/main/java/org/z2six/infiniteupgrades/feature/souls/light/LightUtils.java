@@ -1,4 +1,4 @@
-// file: src/main/java/org/z2six/infiniteupgrades/util/LightUtils.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/light/LightUtils.java
 package org.z2six.infiniteupgrades.feature.souls.light;
 
 import com.mojang.logging.LogUtils;

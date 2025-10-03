@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/logic/LevelMath.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/math/LevelMath.java
 package org.z2six.infiniteupgrades.core.math;
 
 import net.minecraft.network.chat.Component;

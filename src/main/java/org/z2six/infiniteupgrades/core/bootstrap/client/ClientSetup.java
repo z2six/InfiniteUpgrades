@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/client/ClientSetup.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/bootstrap/client/ClientSetup.java
 package org.z2six.infiniteupgrades.core.bootstrap.client;
 
 import com.mojang.logging.LogUtils;

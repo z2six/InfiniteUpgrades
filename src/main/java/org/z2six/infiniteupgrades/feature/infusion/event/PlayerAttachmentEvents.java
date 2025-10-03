@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/event/PlayerAttachmentEvents.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/event/PlayerAttachmentEvents.java
 package org.z2six.infiniteupgrades.feature.infusion.event;
 
 import com.mojang.logging.LogUtils;

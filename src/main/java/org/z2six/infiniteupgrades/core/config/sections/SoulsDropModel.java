@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/sections/SoulsDropModel.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/SoulsDropModel.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
 /** Selection models for choosing which soul tier drops. */

@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/Config.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/Config.java
 package org.z2six.infiniteupgrades.core;
 
 import net.minecraft.core.registries.BuiltInRegistries;

@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/SoulOrbEntity.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/entity/SoulOrbEntity.java
 package org.z2six.infiniteupgrades.feature.souls.entity;
 
 import com.mojang.logging.LogUtils;

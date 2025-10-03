@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/util/StartupCleanup.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/logic/StartupCleanup.java
 package org.z2six.infiniteupgrades.feature.souls.logic;
 
 import com.mojang.logging.LogUtils;

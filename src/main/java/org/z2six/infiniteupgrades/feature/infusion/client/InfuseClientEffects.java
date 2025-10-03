@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/InfuseClientEffects.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/InfuseClientEffects.java
 package org.z2six.infiniteupgrades.feature.infusion.client;
 
 import com.mojang.logging.LogUtils;

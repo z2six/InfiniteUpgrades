@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/registry/ModSounds.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/registry/ModSounds.java
 package org.z2six.infiniteupgrades.core.registry;
 
 import net.minecraft.core.registries.Registries;

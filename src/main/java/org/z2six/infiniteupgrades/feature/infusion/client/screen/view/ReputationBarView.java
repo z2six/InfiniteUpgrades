@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/screen/view/ReputationBarView.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/ReputationBarView.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;

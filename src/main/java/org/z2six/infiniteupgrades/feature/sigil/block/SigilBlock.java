@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/feature/sigil/block/SigilBlock.java
 package org.z2six.infiniteupgrades.feature.sigil.block;
 
 import com.mojang.logging.LogUtils;

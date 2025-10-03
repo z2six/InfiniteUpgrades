@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/RepRequestC2S.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/reputation/net/RepRequestC2S.java
 
 package org.z2six.infiniteupgrades.feature.reputation.net;
 

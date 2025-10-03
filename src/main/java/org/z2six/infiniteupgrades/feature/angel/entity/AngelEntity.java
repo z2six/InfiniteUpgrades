@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/world/AngelEntity.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/angel/entity/AngelEntity.java
 package org.z2six.infiniteupgrades.feature.angel.entity;
 
 import com.mojang.logging.LogUtils;

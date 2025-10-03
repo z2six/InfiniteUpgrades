@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/rules/chance/ChanceModel.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/rules/chance/ChanceModel.java
 package org.z2six.infiniteupgrades.feature.infusion.rules.chance;
 
 /** Computes chance for L -> L+1. */

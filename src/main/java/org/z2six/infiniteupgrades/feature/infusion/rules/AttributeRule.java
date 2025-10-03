@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/rules/AttributeRule.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/rules/AttributeRule.java
 package org.z2six.infiniteupgrades.feature.infusion.rules;
 
 import net.minecraft.resources.ResourceLocation;

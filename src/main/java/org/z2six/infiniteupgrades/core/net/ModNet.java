@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/ModNet.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/net/ModNet.java
 package org.z2six.infiniteupgrades.core.net;
 
 import com.mojang.logging.LogUtils;

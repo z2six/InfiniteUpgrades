@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/logic/InfuseTimers.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/InfuseTimers.java
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;

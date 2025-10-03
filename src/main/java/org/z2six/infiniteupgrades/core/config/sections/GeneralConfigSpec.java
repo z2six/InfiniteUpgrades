@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/GeneralConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import com.mojang.logging.LogUtils;

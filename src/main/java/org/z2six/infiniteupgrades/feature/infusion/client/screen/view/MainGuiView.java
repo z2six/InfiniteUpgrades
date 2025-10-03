@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/screen/view/MainGuiView.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/MainGuiView.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;

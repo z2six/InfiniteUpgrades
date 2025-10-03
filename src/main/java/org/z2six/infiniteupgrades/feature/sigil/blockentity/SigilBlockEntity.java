@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/world/blockentity/SigilBlockEntity.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/sigil/blockentity/SigilBlockEntity.java
 package org.z2six.infiniteupgrades.feature.sigil.blockentity;
 
 import com.mojang.logging.LogUtils;

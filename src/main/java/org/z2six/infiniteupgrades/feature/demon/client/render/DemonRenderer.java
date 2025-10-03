@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/feature/demon/client/render/DemonRenderer.java
 package org.z2six.infiniteupgrades.feature.demon.client.render;
 
 import com.mojang.logging.LogUtils;

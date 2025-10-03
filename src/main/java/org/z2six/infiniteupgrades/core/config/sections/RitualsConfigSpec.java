@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/RitualsConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import net.neoforged.neoforge.common.ModConfigSpec;

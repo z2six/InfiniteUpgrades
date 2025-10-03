@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/core/client/util/ColorUtil.java
 package org.z2six.infiniteupgrades.core.client.util;
 
 import net.minecraft.ChatFormatting;

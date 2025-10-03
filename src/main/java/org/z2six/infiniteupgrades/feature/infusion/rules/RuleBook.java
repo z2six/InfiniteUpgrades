@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/rules/RuleBook.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/rules/RuleBook.java
 package org.z2six.infiniteupgrades.feature.infusion.rules;
 
 import com.mojang.logging.LogUtils;

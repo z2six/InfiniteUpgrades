@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/parsing/ConfigParsing.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/ConfigParsing.java
 package org.z2six.infiniteupgrades.core.config;
 
 import net.minecraft.resources.ResourceLocation;

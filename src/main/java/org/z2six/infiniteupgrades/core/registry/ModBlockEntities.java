@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/core/registry/ModBlockEntities.java
 package org.z2six.infiniteupgrades.core.registry;
 
 import com.mojang.logging.LogUtils;

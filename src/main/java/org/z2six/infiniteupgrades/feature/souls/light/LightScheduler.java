@@ -1,4 +1,4 @@
-// file: src/main/java/org/z2six/infiniteupgrades/util/LightScheduler.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/light/LightScheduler.java
 package org.z2six.infiniteupgrades.feature.souls.light;
 
 import com.mojang.logging.LogUtils;

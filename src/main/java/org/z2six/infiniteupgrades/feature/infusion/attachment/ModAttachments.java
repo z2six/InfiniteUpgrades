@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/capability/ModAttachments.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/attachment/ModAttachments.java
 package org.z2six.infiniteupgrades.feature.infusion.attachment;
 
 import com.mojang.serialization.Codec;

@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/logic/PendingStore.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/PendingStore.java
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;
@@ -15,6 +15,15 @@ import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
 
+/**
+ * File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/PendingStore.java
+ *
+ * Restored behavior:
+ * - When an infusion finalizes, write the result into the player's ritual attachment slot2.
+ * - The menu (if open) will pull slot2 into its output slot via serverPullResultFromAttachment().
+ * - Auto-claim into inventory happens ONLY in AngelDemonMenu pre-flight guard when starting a new infusion
+ *   and a real result is still sitting in the menu's output slot.
+ */
 public final class PendingStore {
     private static final Logger LOG = LogUtils.getLogger();
 
@@ -180,6 +189,11 @@ public final class PendingStore {
         sp.getPersistentData().remove(ROOT_KEY);
     }
 
+    /**
+     * If ready, computes the result and writes it into the player's ritual attachment slot2.
+     * The menu will pull this into its output slot when open.
+     * @return success flag, or null if not ready.
+     */
     public static Boolean finalizeIfReady(ServerPlayer sp, long now) {
         Snapshot snap = read(sp);
         if (!snap.active()) return null;

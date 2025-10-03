@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/feature/tooltips/TooltipHooks.java
 package org.z2six.infiniteupgrades.feature.tooltips;
 
 import com.mojang.logging.LogUtils;

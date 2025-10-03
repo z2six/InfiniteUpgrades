@@ -1,4 +1,4 @@
-// file: src/main/java/org/z2six/infiniteupgrades/client/SoulOrbRenderer.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/client/render/SoulOrbRenderer.Java
 package org.z2six.infiniteupgrades.feature.souls.client.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;

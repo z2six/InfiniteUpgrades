@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/PendingPollC2S.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/net/PendingPollC2S.java
 package org.z2six.infiniteupgrades.feature.infusion.net;
 
 import net.minecraft.network.FriendlyByteBuf;

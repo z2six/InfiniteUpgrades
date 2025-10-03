@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/ProgressPhases.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/ProgressPhases.java
 package org.z2six.infiniteupgrades.feature.infusion.client;
 
 /**

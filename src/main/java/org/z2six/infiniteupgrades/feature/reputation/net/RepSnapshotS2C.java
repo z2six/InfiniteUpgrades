@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/RepSnapshotS2C.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/reputation/net/RepSnapshotS2C.java
 package org.z2six.infiniteupgrades.feature.reputation.net;
 
 import net.minecraft.network.FriendlyByteBuf;

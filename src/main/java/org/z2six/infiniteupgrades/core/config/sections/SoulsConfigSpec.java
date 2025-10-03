@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/SoulsConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import net.minecraft.resources.ResourceLocation;

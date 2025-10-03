@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/config/UpgradeServerConfig.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/config/UpgradeServerConfig.java
 package org.z2six.infiniteupgrades.core.config;
 
 import com.mojang.logging.LogUtils;

@@ -1,3 +1,4 @@
+// File: src/main/java/org/z2six/infiniteupgrades/feature/demon/entity/DemonEntity.java
 package org.z2six.infiniteupgrades.feature.demon.entity;
 
 import com.mojang.logging.LogUtils;

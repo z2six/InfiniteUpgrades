@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/tick/InfuseServerTicker.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/tick/InfuseServerTicker.java
 package org.z2six.infiniteupgrades.feature.infusion.tick;
 
 import com.mojang.logging.LogUtils;
@@ -12,8 +12,9 @@ import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
 
 /**
- * Server tick hook that finalizes pending infusions and handles early-outcome hints.
- * If you also have InfuseTimers, keep only one of these tickers active.
+ * File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/tick/InfuseServerTicker.java
+ *
+ * Restored behavior: PendingStore writes result to attachment s2; if menu open, pull it into output slot.
  */
 public final class InfuseServerTicker {
     private static final Logger LOG = LogUtils.getLogger();
@@ -47,7 +48,9 @@ public final class InfuseServerTicker {
                 if (success == null) continue;
 
                 if (sp.containerMenu instanceof AngelDemonMenu menu) {
+                    // Pull the attachment s2 into the menu's output slot
                     menu.serverPullResultFromAttachment();
+                    // Then notify UI of outcome
                     ModNet.sendInfuseResultTo(sp, menu.containerId, success);
                 } else {
                     if (success) {

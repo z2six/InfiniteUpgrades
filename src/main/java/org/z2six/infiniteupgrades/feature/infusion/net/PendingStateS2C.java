@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/PendingStateS2C.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/net/PendingStateS2C.java
 package org.z2six.infiniteupgrades.feature.infusion.net;
 
 import net.minecraft.network.FriendlyByteBuf;

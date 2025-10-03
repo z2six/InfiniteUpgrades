@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/world/menu/AngelDemonMenu.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/menu/AngelDemonMenu.java
 package org.z2six.infiniteupgrades.feature.infusion.menu;
 
 import com.mojang.datafixers.util.Pair;
@@ -213,6 +213,17 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     public void onInfuseButtonPressed(Player player) {
         try {
             if (player == null || player.level().isClientSide) return;
+
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                ItemStack existingOut = baseInv.getItem(2);
+                if (!existingOut.isEmpty() && !isPreview(existingOut)) {
+                    org.z2six.infiniteupgrades.feature.infusion.logic.AutoClaimService.giveOrDrop(sp, existingOut.copy());
+                    withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
+                    persistSlotsToAttachmentServer();
+                    syncToClient("auto-claimed lingering output on new infusion");
+                    updatePreview(); // optional but harmless
+                }
+            }
 
             ItemStack in  = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);

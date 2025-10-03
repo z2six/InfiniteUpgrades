@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/rules/chance/FlatDecrementChanceModel.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/rules/chance/FlatDecrementChanceModel.java
 package org.z2six.infiniteupgrades.feature.infusion.rules.chance;
 
 import java.util.Map;

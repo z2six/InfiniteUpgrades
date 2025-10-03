@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/client/widget/TriStateImageButton.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/widget/TriStateImageButton.java
 package org.z2six.infiniteupgrades.feature.infusion.client.widget;
 
 import net.minecraft.client.gui.GuiGraphics;

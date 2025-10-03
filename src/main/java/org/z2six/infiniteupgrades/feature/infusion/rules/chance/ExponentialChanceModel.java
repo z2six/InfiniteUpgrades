@@ -1,4 +1,4 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/rules/chance/ExponentialChanceModel.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/rules/chance/ExponentialChanceModel.java
 package org.z2six.infiniteupgrades.feature.infusion.rules.chance;
 
 import java.util.Map;

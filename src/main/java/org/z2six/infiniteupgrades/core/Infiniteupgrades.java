@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/Infiniteupgrades.java
+// File: src/main/java/org/z2six/infiniteupgrades/core/Infiniteupgrades.java
 package org.z2six.infiniteupgrades.core;
 
 // NOTE: GeckoLib.initialize() is not required with 4.7.6 on NeoForge.

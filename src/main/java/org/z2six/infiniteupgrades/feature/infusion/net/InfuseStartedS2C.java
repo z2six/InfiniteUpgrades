@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/network/InfuseStartedS2C.java
+// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/net/InfuseStartedS2C.java
 package org.z2six.infiniteupgrades.feature.infusion.net;
 
 import net.minecraft.network.FriendlyByteBuf;
