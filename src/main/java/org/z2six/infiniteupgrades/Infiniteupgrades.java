@@ -32,6 +32,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.client.AngelRenderer;
 import org.z2six.infiniteupgrades.client.DemonRenderer;
+import org.z2six.infiniteupgrades.client.InfuseClientTicker;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.registry.ModBlockEntities;
@@ -42,6 +43,8 @@ import org.z2six.infiniteupgrades.world.DemonEntity;
 import org.z2six.infiniteupgrades.world.SigilBlock;
 // NEW: attachments registration
 import org.z2six.infiniteupgrades.capability.ModAttachments;
+// NEW: sounds registration
+import org.z2six.infiniteupgrades.registry.ModSounds;
 
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
@@ -94,6 +97,9 @@ public class Infiniteupgrades {
 
         // ✅ Register attachment types on the MOD event bus (this was missing)
         ModAttachments.register(modEventBus);
+
+        // ✅ Register mod sounds
+        ModSounds.SOUND_EVENTS.register(modEventBus);
 
         // Listen to common-bus gameplay events (ServerStartingEvent below)
         NeoForge.EVENT_BUS.register(this);
@@ -151,6 +157,9 @@ public class Infiniteupgrades {
         @SubscribeEvent
         public static void clientSetup(FMLClientSetupEvent evt) {
             LOGGER.info("[InfiniteUpgrades] Client setup; user={}", Minecraft.getInstance().getUser().getName());
+
+            // ✅ Non-deprecated: register client tick listener programmatically
+            NeoForge.EVENT_BUS.addListener(InfuseClientTicker::onClientTick);
         }
 
         @SubscribeEvent

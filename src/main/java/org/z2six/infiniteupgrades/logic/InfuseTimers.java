@@ -7,13 +7,10 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.client.ProgressPhases; // <-- NEW: reuse same math
 import org.z2six.infiniteupgrades.network.ModNet;
 import org.z2six.infiniteupgrades.world.menu.AngelDemonMenu;
 
-/**
- * Server tick hook that finalizes pending infusions.
- * Registered from Infiniteupgrades ctor: NeoForge.EVENT_BUS.addListener(InfuseTimers::onLevelTick)
- */
 public final class InfuseTimers {
     private static final Logger LOG = LogUtils.getLogger();
 
@@ -24,28 +21,37 @@ public final class InfuseTimers {
         var server = evt.getServer();
         if (server == null) return;
 
-        // Use overworld gameTime as the canonical clock (all dimensions tick together in SP/typical servers).
         ServerLevel overworld = server.overworld();
         if (overworld == null) return;
         long now = overworld.getGameTime();
 
         for (ServerPlayer sp : server.getPlayerList().getPlayers()) {
             try {
-                Boolean success = PendingStore.finalizeIfReady(sp, now);
-                if (success == null) continue; // not ready
+                var s = PendingStore.read(sp);
 
-                // If their menu is open, mirror attachment->menu slot2 immediately
+                // --- EARLY OUTCOME HINT exactly at flashing start (fill complete) ---
+                if (s.active() && s.duration() > 0 && !s.hintSent()) {
+                    int beforeEnd = ProgressPhases.ticksBeforeEndAtFlashingStart(s.duration());
+                    long flashingStart = s.end() - Math.max(1, beforeEnd);
+
+                    if (now >= flashingStart && now < s.end()) {
+                        ModNet.sendEarlyOutcomeTo(sp, s.success());
+                        PendingStore.markHintSent(sp);
+                        LOG.debug("[InfuseTimers] EarlyOutcome @flashingStart sent to {} (willSucceed={})",
+                                sp.getGameProfile().getName(), s.success());
+                    }
+                }
+
+                // --- FINALIZE IF READY ---
+                Boolean success = PendingStore.finalizeIfReady(sp, now);
+                if (success == null) continue;
+
                 if (sp.containerMenu instanceof AngelDemonMenu menu) {
                     menu.serverPullResultFromAttachment();
-                    // Tell client to unlock/stop anim
                     ModNet.sendInfuseResultTo(sp, menu.containerId, success);
                 } else {
-                    // Even if the menu isn't open, it's fine — result sits in the attachment until next open.
-                    if (success) {
-                        LOG.debug("[InfuseTimers] finalize: success for {}, menu closed", sp.getGameProfile().getName());
-                    } else {
-                        LOG.debug("[InfuseTimers] finalize: fail for {}, menu closed", sp.getGameProfile().getName());
-                    }
+                    LOG.debug("[InfuseTimers] finalize: {} for {} (menu closed)",
+                            success ? "success" : "fail", sp.getGameProfile().getName());
                 }
             } catch (Throwable t) {
                 LOG.error("[InfuseTimers] finalize loop failed for {}", sp.getGameProfile().getName(), t);

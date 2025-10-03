@@ -1,0 +1,12 @@
+{
+  "infuse_success": {
+    "sounds": [
+      { "name": "infiniteupgrades:infuse_success_med", "stream": false }
+    ]
+  },
+  "infuse_fail": {
+    "sounds": [
+      { "name": "infiniteupgrades:infuse_fail", "stream": false }
+    ]
+  }
+}

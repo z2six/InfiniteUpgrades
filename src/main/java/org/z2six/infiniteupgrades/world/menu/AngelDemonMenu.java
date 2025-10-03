@@ -270,6 +270,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 // Let client lock/animate
                 if (delayTicks > 0) {
                     ModNet.sendInfuseStartedTo(sp, this.containerId, end, delayTicks);
+
+                    // NEW: tell the client the outcome right now so it can time effects locally
+                    ModNet.sendEarlyOutcomeTo(sp, success);
                 } else {
                     // Immediate finalize (rare config)
                     PendingStore.finalizeIfReady(sp, now);

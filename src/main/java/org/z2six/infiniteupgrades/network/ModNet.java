@@ -10,6 +10,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.Infiniteupgrades;
+import org.z2six.infiniteupgrades.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.logic.PendingStore;
@@ -58,6 +59,8 @@ public final class ModNet {
                         menu.clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
                         LOG.debug("[ModNet] S2C InfuseStarted: endTime={} durationTicks={}", payload.endGameTime(), payload.durationTicks());
                     }
+                    // NEW: provide timing to global client effects (GUI open or closed)
+                    InfuseClientEffects.onInfuseStarted(payload.endGameTime(), payload.durationTicks());
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply InfuseStartedS2C on client", t);
                 }
@@ -72,6 +75,8 @@ public final class ModNet {
                         menu.clientOnInfuseResult(payload.success());
                         LOG.debug("[ModNet] S2C InfuseResult: success={}", payload.success());
                     }
+                    // NEW: clear any scheduled sound/animation state
+                    InfuseClientEffects.reset();
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply InfuseResultS2C on client", t);
                 }
@@ -109,15 +114,23 @@ public final class ModNet {
                 if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
                     menu.clientOnPendingState(payload);
                 }
+                // NOTE: we don't call InfuseClientEffects here because PendingState is a resume snapshot;
+                // InfuseStarted/EarlyOutcome already seed the effect scheduler.
             });
         });
 
-        // Early outcome (visual)
+        // Early outcome (visual + timing for client effects)
         reg.playToClient(EarlyOutcomeS2C.TYPE, EarlyOutcomeS2C.STREAM_CODEC, (payload, ctx) -> {
             ctx.enqueueWork(() -> {
-                var mc = Minecraft.getInstance();
-                if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
-                    menu.clientOnEarlyOutcome(payload.willSucceed());
+                try {
+                    var mc = Minecraft.getInstance();
+                    if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
+                        menu.clientOnEarlyOutcome(payload.willSucceed());
+                    }
+                    // NEW: inform global client effects so they can schedule sound exactly at flashing start
+                    InfuseClientEffects.onOutcomeKnown(payload.willSucceed());
+                } catch (Throwable t) {
+                    LOG.error("[ModNet] Failed to apply EarlyOutcomeS2C on client", t);
                 }
             });
         });
