@@ -4,17 +4,30 @@ package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScreen;
 
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
 /**
- * Renders the reputation bar (96x11) and its pointer (8x11) using a unified value:
- *  - unified < 0 : demon alignment (LEFT)
- *  - unified > 0 : angel alignment (RIGHT)
+ * File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/ReputationBarView.java
  *
- * The bar normalizes against the server-provided repMax, so it works for 100, 1000, 10000, etc.
+ * Renders the reputation bar (96x11) and pointer (8x11), and shows a tooltip on hover:
+ *  - Angel: <signed angel rep> rep (<signed %> chance)
+ *  - Demon: <signed demon rep> rep (<signed %> chance)
+ *  - Infusions till max: <N> Demon, <M> Angel
+ *
+ * Notes:
+ * - Chance lines are computed exactly like DetailsPanelView (repBonusPerPoint + clamp).
+ * - "Infusions till max" assumes successive *successful* infusions (uses repDeltaSuccess magnitude).
+ *   If repDeltaSuccess is 0, it falls back to repDeltaFail; if both are 0, we display "∞".
  */
 public final class ReputationBarView {
     private static final Logger LOG = LogUtils.getLogger();
@@ -24,6 +37,9 @@ public final class ReputationBarView {
     public static final int BAR_H = 11;
     public static final int PTR_W = 8;
     public static final int PTR_H = 11;
+
+    // Formatting
+    private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
 
     // Resources
     private final ResourceLocation barTex;
@@ -131,12 +147,79 @@ public final class ReputationBarView {
                     PTR_W, PTR_H,
                     PTR_W, PTR_H); // exact pixels, no scaling
         }
+    }
 
-        // LOG.debug("[RepBar] draw unified={} repMax={} normalized={} centerX={} ptrLeftX={} barBaseX={}",
-                // unified, repMaxForView, normalized, (int)Math.round(centerX), ptrLeftX, baseX);
+    /** Draw a tooltip when hovering the reputation bar. */
+    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) {
+        if (!isHovering(mouseX, mouseY)) return;
+
+        // Pull server config snapshot (client-side accessible)
+        var cfg = UpgradeServerConfig.snapshot();
+
+        // Signed rep for each side (positive means aligned with that side)
+        int angelRepSigned = (int)Math.round(unified);
+        int demonRepSigned = (int)Math.round(-unified);
+
+        // Chance effects (mirror DetailsPanelView: no oppositePenaltyFactor here to avoid UI mismatch)
+        double bonusPerPoint = cfg.repBonusPerPoint;
+        double clamp = Math.max(0.0, cfg.repBonusClamp);
+
+        double angelBonus = clampSym(angelRepSigned * bonusPerPoint, clamp); // fraction
+        double demonBonus = clampSym(demonRepSigned * bonusPerPoint, clamp); // fraction
+
+        // Infusions till max, assuming successes toward that side
+        double step = Math.abs(cfg.repDeltaSuccess) > 1.0e-9
+                ? Math.abs(cfg.repDeltaSuccess)
+                : Math.abs(cfg.repDeltaFail);
+
+        String stepsLine;
+        if (step <= 1.0e-12) {
+            stepsLine = "Infusions till max: ∞ Demon, ∞ Angel";
+        } else {
+            double distDemon = Math.max(0.0, (unified + repMaxForView));          // to -repMax
+            double distAngel = Math.max(0.0, (repMaxForView - unified));          // to +repMax
+            long stepsDemon = (long)Math.ceil(distDemon / step);
+            long stepsAngel = (long)Math.ceil(distAngel / step);
+            stepsLine = "Infusions till max: " + stepsDemon + " Demon, " + stepsAngel + " Angel";
+        }
+
+        List<Component> lines = new ArrayList<>(3);
+        lines.add(Component.literal("Angel: " + signedInt(angelRepSigned) + " rep (" + signedPct(angelBonus) + " chance)"));
+        lines.add(Component.literal("Demon: " + signedInt(demonRepSigned) + " rep (" + signedPct(demonBonus) + " chance)"));
+        lines.add(Component.literal(stepsLine));
+
+        // Render tooltip
+        var font = screen.getMinecraft().font;
+        List<net.minecraft.util.FormattedCharSequence> ordered = lines.stream()
+                .map(Component::getVisualOrderText)
+                .toList();
+        gg.renderTooltip(font, ordered, mouseX, mouseY);
+    }
+
+    // ---------------- helpers ----------------
+
+    private boolean isHovering(int mouseX, int mouseY) {
+        return mouseX >= baseX && mouseX < (baseX + BAR_W)
+                && mouseY >= baseY && mouseY < (baseY + BAR_H);
+    }
+
+    private static String signedInt(int v) {
+        return (v >= 0 ? "+" : "") + v;
+    }
+
+    private static String signedPct(double frac) {
+        double pct = frac * 100.0;
+        String s = PCT1.format(Math.abs(pct));
+        return (pct >= 0 ? "+" : "−") + s + "%";
     }
 
     private static double clamp(double v, double lo, double hi) {
         return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static double clampSym(double v, double limitAbs) {
+        if (v >  limitAbs) return  limitAbs;
+        if (v < -limitAbs) return -limitAbs;
+        return v;
     }
 }

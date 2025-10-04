@@ -31,6 +31,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
+ * File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/AngelDemonScreen.java
+ *
  * Angel/Demon GUI screen split into sub-views.
  */
 public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
@@ -50,7 +52,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
-    // NEW: also obfuscate parentheses segments like "(+20%)" for the preview tooltip
+    // also obfuscate parentheses segments like "(+20%)" for the preview tooltip
     private static final Pattern PARENS   = Pattern.compile("\\([^)]*\\)");
 
     private MainGuiView mainView;
@@ -208,7 +210,11 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         super.render(gg, mouseX, mouseY, partialTick);
 
         // Draw reputation overlay after the base UI so it's on top
-        if (repView != null) repView.render(gg);
+        if (repView != null) {
+            repView.render(gg);
+            // NEW: draw tooltip when hovering the rep bar
+            repView.renderOverlay(gg, mouseX, mouseY);
+        }
 
         if (detailsView != null) detailsView.renderOverlay(gg, mouseX, mouseY);
 
