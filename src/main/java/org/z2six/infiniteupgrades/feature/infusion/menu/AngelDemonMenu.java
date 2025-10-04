@@ -26,16 +26,16 @@ import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
-import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.core.net.ModNet;
+import org.z2six.infiniteupgrades.core.registry.ModMenus;
+import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
 import org.z2six.infiniteupgrades.feature.infusion.logic.AttemptRng;
 import org.z2six.infiniteupgrades.feature.infusion.logic.PendingStore;
-import org.z2six.infiniteupgrades.feature.reputation.logic.Reputation;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
 import org.z2six.infiniteupgrades.feature.infusion.logic.UpgradeService;
-import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.feature.infusion.net.PendingStateS2C;
-import org.z2six.infiniteupgrades.core.registry.ModMenus;
+import org.z2six.infiniteupgrades.feature.reputation.logic.Reputation;
 
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -63,6 +63,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final int HOTBAR_X = 9;
     private static final int HOTBAR_Y = 199;
 
+    /** Button id used by the client when calling handleInventoryButtonClick. */
     public static final int BUTTON_INFUSE = 0;
 
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
@@ -74,7 +75,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     );
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
-    // Inventory
+    // Inventory for the 3 ritual slots (0=input,1=resource,2=output)
     private final Container baseInv = new SimpleContainer(3) {
         @Override public void setChanged() {
             super.setChanged();
@@ -91,14 +92,18 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private BlockPos anchorPos = BlockPos.ZERO;
     private final Player owner;
 
-    // Client-side cosmetic lock
-    private long clientLockEndGameTime = -1L;
+    // --------------- Client lock snapshot (read by screen/MainGuiView) ---------------
+    private long clientLockEndGameTime   = 0L; // 0 => no lock
     private int  clientLockDurationTicks = 0;
+
+    // Optional: early outcome (cosmetic)
     private boolean clientOutcomeKnown = false;
-    private boolean clientWillSucceed = false;
+    private boolean clientWillSucceed  = false;
 
     // Per-menu extra salt for RNG
     private long menuAttemptCounter = 0L;
+
+    // ---------------- ctors ----------------
 
     public AngelDemonMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
@@ -140,7 +145,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
         });
 
-        // Player inv
+        // Player inventory & hotbar
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 9; ++col) {
                 this.addSlot(new Slot(inv, col + row * 9 + 9,
@@ -177,6 +182,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
         }
+
+        // Client-side ctor: clear any stale client lock snapshot when the screen is built.
+        clientClearServerLock();
     }
 
     public RitualType ritual() { return ritual; }
@@ -198,17 +206,71 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         updatePreview();
     }
 
-    // --------- Button handling (server) ---------
+    // --------- Button handling (server-authoritative) ---------
 
     @Override
     public boolean clickMenuButton(Player player, int id) {
-        LOG.info("[AngelDemonMenu] clickMenuButton id={} (serverSide={})", id, player != null && !player.level().isClientSide);
-        if (id == BUTTON_INFUSE) {
-            onInfuseButtonPressed(player);
+        if (id != BUTTON_INFUSE) {
+            return super.clickMenuButton(player, id);
+        }
+
+        // Server-authoritative guard: ignore client if an infusion is already running.
+        if (!(player instanceof net.minecraft.server.level.ServerPlayer sp)) {
+            return true; // client should never process; return true to swallow
+        }
+
+        final long now = sp.level().getGameTime();
+        final PendingStore.Snapshot snap = PendingStore.read(sp);
+        if (snap.active() && now < snap.end()) {
+            // Already running → do nothing. (Optionally re-send a lock snapshot here.)
             return true;
         }
-        return super.clickMenuButton(player, id);
+
+        // Delegate to the real starter logic (already validates and arms PendingStore).
+        onInfuseButtonPressed(sp);
+        return true;
     }
+
+    // --------- Client hooks (called by S2C handlers) ---------
+
+    /** Read by the screen to know if/how long to lock the Infuse button. */
+    public long getClientLockEndGameTime()   { return clientLockEndGameTime; }
+    public int  getClientLockDurationTicks() { return clientLockDurationTicks; }
+
+    // Back-compat helpers so existing S2C code can keep calling the old names
+    public void clientOnInfuseStarted(long endGameTime, int durationTicks) {
+        this.clientLockEndGameTime   = Math.max(0L, endGameTime);
+        this.clientLockDurationTicks = Math.max(0,  durationTicks);
+        this.clientOutcomeKnown = false;
+        this.clientWillSucceed  = false;
+    }
+    public void clientOnInfuseResult(boolean success) {
+        this.clientLockEndGameTime   = 0L;
+        this.clientLockDurationTicks = 0;
+        this.clientOutcomeKnown = false;
+        this.clientWillSucceed  = false;
+    }
+    public void clientOnEarlyOutcome(boolean willSucceed) {
+        this.clientOutcomeKnown = true;
+        this.clientWillSucceed  = willSucceed;
+    }
+    public void clientOnPendingState(PendingStateS2C payload) {
+        if (!payload.active()) {
+            clientOnInfuseResult(false);
+            return;
+        }
+        clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
+        if (payload.outcomeKnown()) clientOnEarlyOutcome(payload.willSucceed());
+    }
+
+    // Convenience aliases (if you prefer the newer naming)
+    public void clientApplyServerLock(long endGameTime, int durationTicks) { clientOnInfuseStarted(endGameTime, durationTicks); }
+    public void clientClearServerLock() { clientOnInfuseResult(false); }
+
+    public boolean isClientOutcomeKnown() { return clientOutcomeKnown; }
+    public boolean getClientWillSucceed() { return clientWillSucceed; }
+
+    // --------- Server: actual click handling & attempt start ---------
 
     public void onInfuseButtonPressed(Player player) {
         try {
@@ -288,7 +350,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 // Let client lock/animate
                 if (delayTicks > 0) {
                     ModNet.sendInfuseStartedTo(sp, this.containerId, end, delayTicks);
-                    // NEW: tell the client the outcome right now so it can time effects locally
+                    // also send early outcome (cosmetic)
                     ModNet.sendEarlyOutcomeTo(sp, success);
                 } else {
                     // Immediate finalize (rare config)
@@ -444,41 +506,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         }
     }
 
-    // --------- Client hooks ---------
-
-    public void clientOnInfuseStarted(long endGameTime, int durationTicks) {
-        this.clientLockEndGameTime = endGameTime;
-        this.clientLockDurationTicks = durationTicks;
-        this.clientOutcomeKnown = false;
-        this.clientWillSucceed = false;
-    }
-
-    public void clientOnInfuseResult(boolean success) {
-        this.clientLockEndGameTime = -1L;
-        this.clientLockDurationTicks = 0;
-        this.clientOutcomeKnown = false;
-        this.clientWillSucceed = false;
-    }
-
-    public void clientOnEarlyOutcome(boolean willSucceed) {
-        this.clientOutcomeKnown = true;
-        this.clientWillSucceed = willSucceed;
-    }
-
-    public void clientOnPendingState(PendingStateS2C payload) {
-        if (!payload.active()) {
-            clientOnInfuseResult(false);
-            return;
-        }
-        clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
-        if (payload.outcomeKnown()) clientOnEarlyOutcome(payload.willSucceed());
-    }
-
-    public long getClientLockEndGameTime() { return clientLockEndGameTime; }
-    public int  getClientLockDurationTicks() { return clientLockDurationTicks; }
-    public boolean isClientOutcomeKnown() { return clientOutcomeKnown; }
-    public boolean getClientWillSucceed() { return clientWillSucceed; }
-
     // --------- Helpers ---------
 
     private void withPreviewSuppressed(Runnable r) {
@@ -540,7 +567,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             });
             stack.set(DataComponents.CUSTOM_DATA, cleaned);
         } catch (Throwable t) {
-            LOG.error("[AngelDemonMenu] clearPreviewTags failed: {}", t.toString());
+            LOG.error("[AngelDemonMenu] clearPreviewTags failed", t);
         }
     }
 
@@ -678,7 +705,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             slot.onTake(player, stack);
             return copy;
         } catch (Throwable t) {
-            com.mojang.logging.LogUtils.getLogger().error("[AngelDemonMenu] quickMoveStack failed: {}", t.toString());
+            LogUtils.getLogger().error("[AngelDemonMenu] quickMoveStack failed: {}", t.toString());
             return ItemStack.EMPTY;
         }
     }

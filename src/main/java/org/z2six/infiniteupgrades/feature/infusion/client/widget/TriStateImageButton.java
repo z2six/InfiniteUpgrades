@@ -15,6 +15,10 @@ import net.minecraft.resources.ResourceLocation;
  *  - locked (click-disabled)
  *
  * Textures are full images (no atlases); we pass the real texture size to blit() to avoid stretching.
+ *
+ * This version adds two locking modes:
+ *  - Timed lock   (client cooldown): {@link #lockForTicks(int)} with auto-unlock.
+ *  - Hard lock    (await server):    {@link #lockIndefinite()} / {@link #unlockNow()}.
  */
 public final class TriStateImageButton extends AbstractWidget {
     private final ResourceLocation texDefault;
@@ -28,7 +32,11 @@ public final class TriStateImageButton extends AbstractWidget {
     private final int texW;
     private final int texH;
 
+    /** Generic locked flag driving visuals + input gate. */
     private boolean locked = false;
+    /** Hard lock that never ticks down locally (used while waiting for server authority). */
+    private boolean hardLocked = false;
+    /** Remaining ticks for timed lock (ignored while {@code hardLocked} is true). */
     private int lockTicksRemaining = 0; // client-side cooldown ticks (20 tps)
 
     private final Runnable onPressRunnable;
@@ -55,23 +63,36 @@ public final class TriStateImageButton extends AbstractWidget {
 
     public boolean isLocked() { return locked; }
 
-    /** Lock the button for N ticks (client-side). */
+    /** Lock the button for N ticks (client-side timed lock). */
     public void lockForTicks(int ticks) {
+        this.hardLocked = false;                 // switch to timed mode
         this.locked = true;
-        // ensure we never shorten an existing lock if this is called repeatedly
-        int add = Math.max(0, ticks);
-        this.lockTicksRemaining = Math.max(this.lockTicksRemaining, add);
-        this.active = false; // built-in input gate
+        this.lockTicksRemaining = Math.max(0, ticks);
+        this.active = false;                     // built-in input gate
     }
 
     /** Convenience: seconds -> ticks (20 TPS). */
-    public void lockForSeconds(int seconds) {
-        lockForTicks(seconds * 20);
+    public void lockForSeconds(int seconds) { lockForTicks(seconds * 20); }
+
+    /** Engage a hard lock that does NOT tick down locally (await server instruction to unlock). */
+    public void lockIndefinite() {
+        this.hardLocked = true;
+        this.locked = true;
+        this.lockTicksRemaining = 0;
+        this.active = false;
     }
 
-    /** Decrements the lock timer. Call from screen.containerTick. */
+    /** Immediately clear any lock and make the button clickable again. */
+    public void unlockNow() {
+        this.hardLocked = false;
+        this.locked = false;
+        this.lockTicksRemaining = 0;
+        this.active = true;
+    }
+
+    /** Decrements the lock timer. Call from screen.containerTick. Ignored while hard-locked. */
     public void clientTickLock() {
-        if (!locked) return;
+        if (!locked || hardLocked) return;
         if (lockTicksRemaining > 0) {
             lockTicksRemaining--;
             if (lockTicksRemaining <= 0) {
@@ -83,7 +104,7 @@ public final class TriStateImageButton extends AbstractWidget {
 
     @Override
     protected void renderWidget(GuiGraphics gg, int mouseX, int mouseY, float partialTick) {
-        ResourceLocation tex = locked ? texLocked : (isHovered() ? texHover : texDefault);
+        final ResourceLocation tex = locked ? texLocked : (isHovered() ? texHover : texDefault);
         // Use the real texture size for UVs to avoid stretching
         gg.blit(tex, getX(), getY(), 0, 0, drawW, drawH, texW, texH);
     }
