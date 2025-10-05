@@ -7,24 +7,31 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.registry.ModEntityTypes;
+import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 import org.z2six.infiniteupgrades.feature.souls.light.LightScheduler;
 import org.z2six.infiniteupgrades.feature.souls.light.SoulLightService;
 
+import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * NOTE: Logic preserved from your version. Additions:
- * - Tracks the BlockPos used for the static light (if any) via setLightAnchor().
- * - On removal paths (onRemovedFromLevel and lifetime expiry), schedules a light remove and
- *   updates SoulLightService (recordRemoved) to keep persistence consistent.
- * - fadeFactor(...) helper added to support renderer fade-out.
+ * - Homing to nearby players who have a Soul Cage (server authoritative).
+ * - On proximity (<=1 block), adds the tier value to the player's Soul Cage and removes the orb.
+ * - Tracks/saves homing target lightly; if target despawns, orb continues with its current velocity.
+ * - Light cleanup on collect.
  */
 public class SoulOrbEntity extends Entity {
     private static final Logger LOG = LogUtils.getLogger();
@@ -48,8 +55,16 @@ public class SoulOrbEntity extends Entity {
     private float hoverAmplitude = 0.08f;// blocks
 
     // Light cleanup bookkeeping
-    private @org.jetbrains.annotations.Nullable BlockPos lightAnchor;
+    private BlockPos lightAnchor;
     private boolean lightCleared = false;
+
+    // Homing
+    private boolean homing = false;
+    private int     homingTicks = 0;
+    private UUID    homingTargetId = null;
+    private double  speedBase = 0.05;    // starts slow
+    private double  speedAccel = 0.005;  // accelerates every tick while homing
+    private double  speedMax = 1.10;     // clamp
 
     public SoulOrbEntity(EntityType<? extends SoulOrbEntity> type, net.minecraft.world.level.Level level) {
         super(type, level);
@@ -101,6 +116,11 @@ public class SoulOrbEntity extends Entity {
             long lp = tag.getLong("LightPos");
             if (lp != 0L) this.lightAnchor = BlockPos.of(lp);
         }
+        if (tag.contains("Homing")) this.homing = tag.getBoolean("Homing");
+        if (tag.contains("HomingTicks")) this.homingTicks = tag.getInt("HomingTicks");
+        if (tag.contains("HomingTarget")) {
+            try { this.homingTargetId = tag.getUUID("HomingTarget"); } catch (Throwable ignored) {}
+        }
         this.refreshDimensions();
     }
 
@@ -113,6 +133,9 @@ public class SoulOrbEntity extends Entity {
         tag.putFloat("HoverAmp", this.hoverAmplitude);
         tag.putFloat("HoverPhase", this.hoverPhaseOffset);
         if (this.lightAnchor != null) tag.putLong("LightPos", this.lightAnchor.asLong());
+        if (this.homing) tag.putBoolean("Homing", true);
+        if (this.homingTicks > 0) tag.putInt("HomingTicks", this.homingTicks);
+        if (this.homingTargetId != null) tag.putUUID("HomingTarget", this.homingTargetId);
     }
 
     @Override
@@ -127,23 +150,122 @@ public class SoulOrbEntity extends Entity {
         }
 
         if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
-            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), dim={}, lifeLeft={}t",
+            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), dim={}, lifeLeft={}t, homing={}",
                     this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
-                    this.level().dimension().location(), (this.lifetime - this.tickCount));
+                    this.level().dimension().location(), (this.lifetime - this.tickCount), homing);
         }
 
-        // ---- SERVER: authoritative hover motion ----
         if (!level().isClientSide) {
+            serverMotionAndCollection();
+        }
+        // CLIENT: vanilla handles interpolation
+    }
+
+    private void serverMotionAndCollection() {
+        final ServerLevel sl = (ServerLevel) this.level();
+
+        // Check proximity pickup first if already homing (fast path)
+        if (homing) {
+            Player target = getHomingTarget(sl);
+            if (target != null) {
+                // pickup distance is 1 block radius
+                double distSq = target.distanceToSqr(this);
+                if (distSq <= 1.0) {
+                    onCollectedBy(target);
+                    return;
+                }
+            }
+        }
+
+        // Not homing yet? Try to find a player with a Soul Cage in range
+        if (!homing) {
+            int range = Math.max(1, UpgradeServerConfig.snapshot().souls.collectRangeBlocks);
+            AABB box = new AABB(
+                    this.getX() - range, this.getY() - range, this.getZ() - range,
+                    this.getX() + range, this.getY() + range, this.getZ() + range
+            );
+            List<Player> players = sl.getEntitiesOfClass(Player.class, box, EntitySelector.NO_SPECTATORS);
+            Player best = null;
+            double bestDist2 = Double.MAX_VALUE;
+            for (Player p : players) {
+                if (!p.isAlive()) continue;
+                if (SoulCageItem.findAnyCage(p).isEmpty()) continue;
+                double d2 = p.distanceToSqr(this);
+                if (d2 < bestDist2) { bestDist2 = d2; best = p; }
+            }
+            if (best != null) {
+                homing = true;
+                homingTicks = 0;
+                homingTargetId = best.getUUID();
+                // start slow by not changing velocity here; next block accelerates
+            }
+        }
+
+        // If homing, accelerate toward target
+        if (homing) {
+            homingTicks++;
+            double speed = Math.min(speedMax, speedBase + speedAccel * homingTicks);
+
+            Player target = getHomingTarget(sl);
+            if (target != null) {
+                Vec3 to = target.position().add(0, target.getBbHeight() * 0.4, 0).subtract(this.position());
+                Vec3 dir = to.normalize();
+                Vec3 vel = dir.scale(speed);
+                this.setDeltaMovement(vel);
+                this.setPos(this.getX() + vel.x, this.getY() + vel.y, this.getZ() + vel.z);
+            } else {
+                // Target gone: keep drifting with current velocity (doesn't "stop")
+                Vec3 vel = this.getDeltaMovement();
+                if (vel.lengthSqr() < 1.0e-6) {
+                    // give it a tiny nudge forward if it somehow stopped
+                    vel = new Vec3(0, 0.01, 0);
+                }
+                this.setPos(this.getX() + vel.x, this.getY() + vel.y, this.getZ() + vel.z);
+            }
+        } else {
+            // Idle hover (original behavior)
             final double x = this.getX();
             final double z = this.getZ();
             final float t = this.tickCount + this.hoverPhaseOffset;
             final double y = this.hoverBaseY + (Math.sin(t * this.hoverSpeed) * this.hoverAmplitude);
-
             this.setDeltaMovement(Vec3.ZERO);
             this.setPos(x, y, z);
         }
+    }
 
-        // CLIENT: no position fiddling here; vanilla handles interpolation
+    private Player getHomingTarget(ServerLevel sl) {
+        if (homingTargetId == null) return null;
+        Entity e = sl.getEntity(homingTargetId);
+        return (e instanceof Player p && p.isAlive()) ? p : null;
+    }
+
+    private void onCollectedBy(Player player) {
+        // Add units to the player's first Soul Cage stack
+        var snap = UpgradeServerConfig.snapshot();
+        int units = switch (getTier()) {
+            case SMALL       -> snap.souls.tierUnitsOrDefault("SMALL", 1);
+            case MEDIUM      -> snap.souls.tierUnitsOrDefault("MEDIUM", 4);
+            case LARGE       -> snap.souls.tierUnitsOrDefault("LARGE", 8);
+            case EXTRA_LARGE -> snap.souls.tierUnitsOrDefault("EXTRA_LARGE", 16);
+        };
+
+        // If player lost the cage between homing & collect, just discard (no storage target).
+        var stack = SoulCageItem.findAnyCage(player);
+        if (!stack.isEmpty()) {
+            int after = SoulCageItem.addUnits(stack, units);
+            if (LOG_SPAWN) {
+                LOG.info("[SoulOrbEntity] collected: player={}, units={}, tier={}, newTotal={}",
+                        player.getScoreboardName(), units, getTier(), after);
+            }
+        } else {
+            if (LOG_SPAWN) {
+                LOG.info("[SoulOrbEntity] collected but player no longer has a Soul Cage; discarding orb.");
+            }
+        }
+
+        // Clean light and remove
+        cleanupLight();
+        this.discard();
     }
 
     /** Called by spawner to set the exact hover center (existing behavior). */
@@ -208,7 +330,7 @@ public class SoulOrbEntity extends Entity {
     private void cleanupLight() {
         if (this.lightCleared) return;
         if (this.lightAnchor == null) { this.lightCleared = true; return; }
-        if (!(this.level() instanceof net.minecraft.server.level.ServerLevel sl)) { return; }
+        if (!(this.level() instanceof ServerLevel sl)) { return; }
 
         // Schedule actual removal and update persisted registry (matches current SoulLightService API)
         LightScheduler.queueRemove(sl, this.lightAnchor);

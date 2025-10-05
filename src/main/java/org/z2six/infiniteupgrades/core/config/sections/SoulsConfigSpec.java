@@ -16,6 +16,9 @@ import static org.z2six.infiniteupgrades.core.config.ConfigParsing.*;
  *
  * You can enable/disable drops, choose how tiers are picked, clamp who can drop,
  * and even spawn light at the drop location.
+ *
+ * NEW:
+ *  - collectRangeBlocks: max distance at which a player with a Soul Cage attracts orbs.
  */
 public final class SoulsConfigSpec {
 
@@ -41,6 +44,9 @@ public final class SoulsConfigSpec {
     // Cosmetic/utility
     public final ModConfigSpec.BooleanValue spawnLights;
     public final ModConfigSpec.IntValue     lightRadiusBlocks;
+
+    // NEW: collection
+    public final ModConfigSpec.IntValue     collectRangeBlocks;
 
     private SoulsConfigSpec(ModConfigSpec.Builder B) {
         B.push("souls");
@@ -73,7 +79,8 @@ public final class SoulsConfigSpec {
         tierUnitsKV       = B.comment(
                 "[RATIO model] Tier thresholds in UNITS. Format: \"TIER=units\".",
                 "We drop the LARGEST tier whose units <= computed units.",
-                "Default: [\"SMALL=1\",\"MEDIUM=4\",\"LARGE=8\",\"EXTRA_LARGE=16\"]"
+                "Default: [\"SMALL=1\",\"MEDIUM=4\",\"LARGE=8\",\"EXTRA_LARGE=16\"]",
+                "Also used as UNIT VALUE when collecting into the Soul Cage."
         ).defineListAllowEmpty("tierUnits",
                 List.of("SMALL=1","MEDIUM=4","LARGE=8","EXTRA_LARGE=16"),
                 o -> o instanceof String);
@@ -116,6 +123,13 @@ public final class SoulsConfigSpec {
                 "0 = no light. The block light level is roughly radius+1 (max 15)."
         ).defineInRange("lightRadiusBlocks", 3, 0, 14);
 
+        // ---- Collection ----
+        collectRangeBlocks = B.comment(
+                "Maximum distance at which a player WITH a Soul Cage attracts soul orbs.",
+                "If multiple players are in range, the orb will pick the closest one and start homing.",
+                "Once homing starts, the orb continues accelerating until picked up."
+        ).defineInRange("collectRangeBlocks", 12, 1, 64);
+
         B.pop();
     }
 
@@ -145,12 +159,16 @@ public final class SoulsConfigSpec {
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
 
+        // Collection
+        public final int     collectRangeBlocks;
+
         public Snapshot(boolean enabled, double dropChance, SoulsDropModel dropModel,
                         double hpToSoulsRatio, int minUnitsForDrop, Map<String,Integer> tierUnits,
                         Map<String,Double> tierMinHearts,
                         int lifetimeSeconds, boolean allowPvP,
                         Set<ResourceLocation> whitelist, Set<ResourceLocation> blacklist,
-                        boolean spawnLights, int lightRadiusBlocks) {
+                        boolean spawnLights, int lightRadiusBlocks,
+                        int collectRangeBlocks) {
             this.enabled = enabled;
             this.dropChance = dropChance;
             this.dropModel = dropModel;
@@ -164,6 +182,7 @@ public final class SoulsConfigSpec {
             this.blacklist = blacklist;
             this.spawnLights = spawnLights;
             this.lightRadiusBlocks = lightRadiusBlocks;
+            this.collectRangeBlocks = collectRangeBlocks;
         }
     }
 
@@ -191,7 +210,8 @@ public final class SoulsConfigSpec {
                 parseIdSet(whitelistIds.get()),
                 parseIdSet(blacklistIds.get()),
                 spawnLights.get(),
-                Math.max(0, lightRadiusBlocks.get())
+                Math.max(0, lightRadiusBlocks.get()),
+                Math.max(1, collectRangeBlocks.get())
         );
     }
 }

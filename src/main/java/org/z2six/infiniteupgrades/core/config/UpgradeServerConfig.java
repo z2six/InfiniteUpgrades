@@ -166,6 +166,9 @@ public final class UpgradeServerConfig {
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
 
+        // Collection controls
+        public final int     collectRangeBlocks;
+
         public SoulsConfig(boolean enabled,
                            double dropChance,
                            SoulsDropModel dropModel,
@@ -178,7 +181,8 @@ public final class UpgradeServerConfig {
                            Set<ResourceLocation> whitelist,
                            Set<ResourceLocation> blacklist,
                            boolean spawnLights,
-                           int lightRadiusBlocks) {
+                           int lightRadiusBlocks,
+                           int collectRangeBlocks) {
             this.enabled = enabled;
             this.dropChance = dropChance;
             this.dropModel = dropModel;
@@ -192,6 +196,7 @@ public final class UpgradeServerConfig {
             this.blacklist = blacklist;
             this.spawnLights = spawnLights;
             this.lightRadiusBlocks = Math.max(0, lightRadiusBlocks);
+            this.collectRangeBlocks = Math.max(1, collectRangeBlocks);
         }
 
         public int tierUnitsOrDefault(String tierName, int def) {
@@ -266,7 +271,8 @@ public final class UpgradeServerConfig {
                     ss.whitelist,
                     ss.blacklist,
                     ss.spawnLights,
-                    ss.lightRadiusBlocks
+                    ss.lightRadiusBlocks,
+                    ss.collectRangeBlocks
             );
 
             return new Snapshot(
@@ -303,7 +309,7 @@ public final class UpgradeServerConfig {
                     parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
                     1.0, 1.5,           // angel, demon
                     3.0,                // infuseDelaySeconds (default)
-                    0.35, 0.5,           // sfxSuccessVolume, sfxFailVolume (defaults)
+                    0.35, 0.5,          // sfxSuccessVolume, sfxFailVolume (defaults)
                     100, 0.1, 0.0,      // repMax, deltaSuccess, deltaFail
                     0.001, 0.20,        // bonusPerPoint, bonusClamp
                     List.of(
@@ -326,7 +332,8 @@ public final class UpgradeServerConfig {
                             Set.of(),                  // whitelist
                             Set.of(),                  // blacklist
                             true,                      // spawnLights (default)
-                            3                          // lightRadiusBlocks (default)
+                            3,                         // lightRadiusBlocks (default)
+                            12                         // collectRangeBlocks (default)
                     ),
                     new TuningConfigSpec.Snapshot(0.05, Map.of()) // stepPercent, bonusSteps
             );

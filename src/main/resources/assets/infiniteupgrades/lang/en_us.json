@@ -4,5 +4,6 @@
   "item.infiniteupgrades.celestial_sigil": "Celestial Sigil",
   "block.infiniteupgrades.unholy_sigil": "Unholy Sigil",
   "item.infiniteupgrades.unholy_sigil": "Unholy Sigil",
-  "item.infiniteupgrades.soul_cage": "Soul Cage"
+  "item.infiniteupgrades.soul_cage": "Soul Cage",
+  "item.infiniteupgrades.soul_cage.total": "Souls: %s"
 }
