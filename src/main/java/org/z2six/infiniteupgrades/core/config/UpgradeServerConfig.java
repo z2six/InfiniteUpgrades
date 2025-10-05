@@ -303,7 +303,7 @@ public final class UpgradeServerConfig {
                     parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
                     1.0, 1.5,           // angel, demon
                     3.0,                // infuseDelaySeconds (default)
-                    1.0, 1.0,           // sfxSuccessVolume, sfxFailVolume (defaults)
+                    0.35, 0.5,           // sfxSuccessVolume, sfxFailVolume (defaults)
                     100, 0.1, 0.0,      // repMax, deltaSuccess, deltaFail
                     0.001, 0.20,        // bonusPerPoint, bonusClamp
                     List.of(
