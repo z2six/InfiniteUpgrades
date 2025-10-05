@@ -9,6 +9,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item; // <-- NEW
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
@@ -85,6 +86,12 @@ public class Infiniteupgrades {
     public static final DeferredItem<BlockItem> UNHOLY_SIGIL_ITEM =
             ITEMS.registerSimpleBlockItem("unholy_sigil", UNHOLY_SIGIL);
 
+    // === NEW: Soul Cage item (no behavior yet; visual + recipe wiring) ===
+    public static final DeferredItem<Item> SOUL_CAGE = ITEMS.register("soul_cage",
+            () -> new Item(new Item.Properties()
+                    .stacksTo(1) // feels right for an equipment-like item; change if you prefer
+            ));
+
     // --- Mod construction ---
     public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
         // Registry/event wiring
@@ -139,6 +146,11 @@ public class Infiniteupgrades {
                 event.accept(CELESTIAL_SIGIL_ITEM);
                 event.accept(UNHOLY_SIGIL_ITEM);
                 LOGGER.debug("[Infiniteupgrades] Added items to BUILDING_BLOCKS tab");
+            }
+            // Put Soul Cage somewhere sensible by default
+            if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
+                event.accept(SOUL_CAGE);
+                LOGGER.debug("[Infiniteupgrades] Added Soul Cage to TOOLS_AND_UTILITIES tab");
             }
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to add items to creative tab", t);
