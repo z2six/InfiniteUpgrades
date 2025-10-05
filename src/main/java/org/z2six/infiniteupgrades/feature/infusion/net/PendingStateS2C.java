@@ -26,12 +26,12 @@ public record PendingStateS2C(
 
     public static final StreamCodec<FriendlyByteBuf, PendingStateS2C> STREAM_CODEC =
             StreamCodec.composite(
-                    ByteBufCodecs.VAR_INT, PendingStateS2C::containerId,
-                    ByteBufCodecs.BOOL,    PendingStateS2C::active,
-                    ByteBufCodecs.VAR_LONG,PendingStateS2C::endGameTime,
-                    ByteBufCodecs.VAR_INT, PendingStateS2C::durationTicks,
-                    ByteBufCodecs.BOOL,    PendingStateS2C::outcomeKnown,
-                    ByteBufCodecs.BOOL,    PendingStateS2C::willSucceed,
+                    ByteBufCodecs.VAR_INT,  PendingStateS2C::containerId,
+                    ByteBufCodecs.BOOL,     PendingStateS2C::active,
+                    ByteBufCodecs.VAR_LONG, PendingStateS2C::endGameTime,
+                    ByteBufCodecs.VAR_INT,  PendingStateS2C::durationTicks,
+                    ByteBufCodecs.BOOL,     PendingStateS2C::outcomeKnown,
+                    ByteBufCodecs.BOOL,     PendingStateS2C::willSucceed,
                     PendingStateS2C::new
             );
 

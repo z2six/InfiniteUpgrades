@@ -15,7 +15,7 @@ public record InfuseResultS2C(int containerId, boolean success) implements Custo
 
     public static final StreamCodec<FriendlyByteBuf, InfuseResultS2C> STREAM_CODEC = StreamCodec.composite(
             ByteBufCodecs.VAR_INT, InfuseResultS2C::containerId,
-            ByteBufCodecs.BOOL, InfuseResultS2C::success,
+            ByteBufCodecs.BOOL,    InfuseResultS2C::success,
             InfuseResultS2C::new
     );
 

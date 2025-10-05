@@ -21,6 +21,8 @@ import java.util.*;
 import static org.z2six.infiniteupgrades.core.config.ConfigParsing.parseLevelDoubleMap;
 
 /**
+ * File: src/main/java/org/z2six/infiniteupgrades/core/config/UpgradeServerConfig.java
+ *
  * SERVER-side authoritative config orchestrator for upgrades (+ souls).
  *
  * Delegates each section to its own *ConfigSpec class. Public API and logic remain intact.
@@ -76,7 +78,11 @@ public final class UpgradeServerConfig {
 
         public final double angelStepMult;
         public final double demonStepMult;
-        public final double infuseDelaySeconds;  // NEW: server-authoritative infuse timer
+        public final double infuseDelaySeconds;  // server-authoritative infuse timer
+
+        // NEW: client SFX volume knobs for infusion success/fail
+        public final double sfxSuccessVolume;    // 0..1
+        public final double sfxFailVolume;       // 0..1
 
         // Unified reputation (no cross-coupling in unified model)
         public final int repMax;
@@ -96,6 +102,7 @@ public final class UpgradeServerConfig {
                          ChanceModelType cm, double start, double dec, double min,
                          double expBase, Map<Integer, Double> overrides,
                          double angelMult, double demonMult, double infuseDelaySeconds,
+                         double sfxSuccessVolume, double sfxFailVolume,
                          int repMax, double repSucc, double repFail,
                          double repBonusPerPoint, double repBonusClamp,
                          List<AttributeRuleConfig> attrs,
@@ -114,6 +121,9 @@ public final class UpgradeServerConfig {
             this.angelStepMult = angelMult;
             this.demonStepMult = demonMult;
             this.infuseDelaySeconds = Math.max(0.0, infuseDelaySeconds);
+
+            this.sfxSuccessVolume = Math.max(0.0, Math.min(1.0, sfxSuccessVolume));
+            this.sfxFailVolume    = Math.max(0.0, Math.min(1.0, sfxFailVolume));
 
             this.repMax = repMax;
             this.repDeltaSuccess = repSucc;
@@ -271,6 +281,7 @@ public final class UpgradeServerConfig {
                     rs.angelStepMult,
                     rs.demonStepMult,
                     rs.infuseDelaySeconds,
+                    rs.successSfxVolume, rs.failSfxVolume,
                     reps.repMax,
                     reps.repDeltaSuccess,
                     reps.repDeltaFail,
@@ -292,6 +303,7 @@ public final class UpgradeServerConfig {
                     parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
                     1.0, 1.5,           // angel, demon
                     3.0,                // infuseDelaySeconds (default)
+                    1.0, 1.0,           // sfxSuccessVolume, sfxFailVolume (defaults)
                     100, 0.1, 0.0,      // repMax, deltaSuccess, deltaFail
                     0.001, 0.20,        // bonusPerPoint, bonusClamp
                     List.of(

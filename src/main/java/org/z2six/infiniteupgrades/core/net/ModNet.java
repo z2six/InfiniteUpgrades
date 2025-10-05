@@ -10,15 +10,16 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
+import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScreen;
-import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.logic.PendingStore;
+import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
+import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
 import org.z2six.infiniteupgrades.feature.infusion.net.*;
 import org.z2six.infiniteupgrades.feature.reputation.logic.Reputation;
 import org.z2six.infiniteupgrades.feature.reputation.net.RepRequestC2S;
 import org.z2six.infiniteupgrades.feature.reputation.net.RepSnapshotS2C;
-import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
 
 @EventBusSubscriber(modid = Infiniteupgrades.MODID)
 public final class ModNet {
@@ -60,10 +61,11 @@ public final class ModNet {
                     var mc = Minecraft.getInstance();
                     if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
                         menu.clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
-                        LOG.debug("[ModNet] S2C InfuseStarted: endTime={} durationTicks={}", payload.endGameTime(), payload.durationTicks());
+                        LOG.debug("[ModNet] S2C InfuseStarted: endTime={} durationTicks={} ritual={}",
+                                payload.endGameTime(), payload.durationTicks(), payload.ritual());
                     }
-                    // NEW: provide timing to global client effects (GUI open or closed)
-                    InfuseClientEffects.onInfuseStarted(payload.endGameTime(), payload.durationTicks());
+                    // Provide timing + ritual to global client effects (GUI open or closed)
+                    InfuseClientEffects.onInfuseStarted(payload.endGameTime(), payload.durationTicks(), payload.ritual());
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply InfuseStartedS2C on client", t);
                 }
@@ -78,8 +80,8 @@ public final class ModNet {
                         menu.clientOnInfuseResult(payload.success());
                         LOG.debug("[ModNet] S2C InfuseResult: success={}", payload.success());
                     }
-                    // NEW: clear any scheduled sound/animation state
-                    InfuseClientEffects.reset();
+                    // Do NOT kill a running animation; let it finish
+                    InfuseClientEffects.onInfuseFinalized();
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply InfuseResultS2C on client", t);
                 }
@@ -117,8 +119,7 @@ public final class ModNet {
                 if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
                     menu.clientOnPendingState(payload);
                 }
-                // NOTE: we don't call InfuseClientEffects here because PendingState is a resume snapshot;
-                // InfuseStarted/EarlyOutcome already seed the effect scheduler.
+                // No change needed: InfuseStarted/EarlyOutcome already seed effect scheduler.
             });
         });
 
@@ -130,7 +131,6 @@ public final class ModNet {
                     if (mc != null && mc.player != null && mc.player.containerMenu instanceof AngelDemonMenu menu) {
                         menu.clientOnEarlyOutcome(payload.willSucceed());
                     }
-                    // NEW: inform global client effects so they can schedule sound exactly at flashing start
                     InfuseClientEffects.onOutcomeKnown(payload.willSucceed());
                 } catch (Throwable t) {
                     LOG.error("[ModNet] Failed to apply EarlyOutcomeS2C on client", t);
@@ -140,6 +140,7 @@ public final class ModNet {
     }
 
     // -------- Public helpers --------
+
     public static void requestRepSnapshot() {
         try { PacketDistributor.sendToServer(RepRequestC2S.INSTANCE); }
         catch (Throwable t) { LOG.error("[ModNet] Failed to send RepRequestC2S", t); }
@@ -155,9 +156,27 @@ public final class ModNet {
         }
     }
 
+    /** New overload including ritual side. Prefer this from server code. */
+    public static void sendInfuseStartedTo(ServerPlayer sp, int containerId, long endGameTime, int durationTicks, RitualType ritual) {
+        try {
+            PacketDistributor.sendToPlayer(sp, new InfuseStartedS2C(containerId, endGameTime, durationTicks, ritual));
+        } catch (Throwable t) {
+            LOG.error("[ModNet] Failed to send InfuseStartedS2C to {}", sp, t);
+        }
+    }
+
+    /**
+     * Back-compat overload: derive ritual side from the player's current AngelDemonMenu when possible.
+     * Keeps existing server call sites working without edits.
+     */
     public static void sendInfuseStartedTo(ServerPlayer sp, int containerId, long endGameTime, int durationTicks) {
-        try { PacketDistributor.sendToPlayer(sp, new InfuseStartedS2C(containerId, endGameTime, durationTicks)); }
-        catch (Throwable t) { LOG.error("[ModNet] Failed to send InfuseStartedS2C to {}", sp, t); }
+        RitualType ritual = RitualType.ANGEL;
+        try {
+            if (sp.containerMenu instanceof AngelDemonMenu menu && menu.containerId == containerId) {
+                ritual = menu.ritual();
+            }
+        } catch (Throwable ignore) {}
+        sendInfuseStartedTo(sp, containerId, endGameTime, durationTicks, ritual);
     }
 
     public static void sendInfuseResultTo(ServerPlayer sp, int containerId, boolean success) {
