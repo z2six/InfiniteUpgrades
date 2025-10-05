@@ -14,6 +14,9 @@ import org.z2six.infiniteupgrades.feature.angel.entity.AngelEntity;
 import org.z2six.infiniteupgrades.feature.demon.entity.DemonEntity;
 import org.z2six.infiniteupgrades.feature.souls.entity.SoulOrbEntity; // <-- NEW
 
+/**
+ * File: src/main/java/org/z2six/infiniteupgrades/core/registry/ModEntityTypes.java
+ */
 public final class ModEntityTypes {
     // Debug logger
     private static final Logger LOG = LogUtils.getLogger();
@@ -45,7 +48,7 @@ public final class ModEntityTypes {
                         .build(id.toString());
             });
 
-    // NEW: Soul Orb (billboarded, tiny, client-tracked frequently)
+    // Soul Orb (billboarded, tiny, client-tracked frequently)
     public static final DeferredHolder<EntityType<?>, EntityType<SoulOrbEntity>> SOUL_ORB =
             ENTITY_TYPES.register("soul_orb", () -> {
                 LOG.debug("[ModEntityTypes] Building EntityType<SoulOrbEntity>");
@@ -53,7 +56,7 @@ public final class ModEntityTypes {
                 return EntityType.Builder.<SoulOrbEntity>of(SoulOrbEntity::new, MobCategory.MISC)
                         .sized(0.3f, 0.3f)
                         .clientTrackingRange(32)
-                        .updateInterval(2)
+                        .updateInterval(1) // <-- was 2; send updates every tick for smoother interpolation
                         .build(id.toString());
             });
 

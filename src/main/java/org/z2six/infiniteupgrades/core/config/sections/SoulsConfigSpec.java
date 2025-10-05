@@ -128,7 +128,7 @@ public final class SoulsConfigSpec {
                 "Maximum distance at which a player WITH a Soul Cage attracts soul orbs.",
                 "If multiple players are in range, the orb will pick the closest one and start homing.",
                 "Once homing starts, the orb continues accelerating until picked up."
-        ).defineInRange("collectRangeBlocks", 12, 1, 64);
+        ).defineInRange("collectRangeBlocks", 6, 1, 64);
 
         B.pop();
     }

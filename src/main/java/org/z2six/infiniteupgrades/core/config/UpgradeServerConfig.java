@@ -333,7 +333,7 @@ public final class UpgradeServerConfig {
                             Set.of(),                  // blacklist
                             true,                      // spawnLights (default)
                             3,                         // lightRadiusBlocks (default)
-                            12                         // collectRangeBlocks (default)
+                            6                          // collectRangeBlocks (default)
                     ),
                     new TuningConfigSpec.Snapshot(0.05, Map.of()) // stepPercent, bonusSteps
             );
