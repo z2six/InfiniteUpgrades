@@ -31,9 +31,6 @@ import java.util.*;
 
 /**
  * Details panel drawn to the right of the main panel.
- *
- * Totals now read server-canonical iu_upgrade.totals{ attr -> { sumPercent, count } }.
- * Recent history keeps reading iu_upgrade.history but renders the signed stepPercent per event.
  */
 public final class DetailsPanelView {
     private static final Logger LOG = LogUtils.getLogger();
@@ -97,6 +94,7 @@ public final class DetailsPanelView {
     // -------------- Resources ----------------
 
     private ResourceLocation detailsTex() {
+        // textures/gui/container/{angel|demon}/details.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/details.png"
@@ -104,6 +102,7 @@ public final class DetailsPanelView {
     }
 
     private ResourceLocation holderTex() {
+        // textures/gui/container/{angel|demon}/scroller_holder.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/scroller_holder.png"
@@ -111,6 +110,7 @@ public final class DetailsPanelView {
     }
 
     private ResourceLocation scrollerTex() {
+        // textures/gui/container/{angel|demon}/scroller.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/scroller.png"
@@ -119,16 +119,20 @@ public final class DetailsPanelView {
 
     // -------------- Public hooks ----------------
 
+    /** Mark contents dirty so they’ll rebuild next frame. */
     public void markDirty() { this.dirty = true; }
 
     // -------------- Rendering ----------------
 
     public void renderBg(GuiGraphics gg) {
+        // Compute details origin (to the right of MAIN)
         detailsOriginX = screen.getLeftPos() + MainGuiView.mainDrawDx() + MainGuiView.MAIN_W + GAP_TO_MAIN;
         detailsOriginY = screen.getTopPos()  + MainGuiView.mainDrawDy();
 
+        // Panel background
         gg.blit(detailsTex(), detailsOriginX, detailsOriginY, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
 
+        // Holder (fixed)
         gg.blit(holderTex(),
                 detailsOriginX + HOLDER_X,
                 detailsOriginY + HOLDER_Y,
@@ -136,11 +140,13 @@ public final class DetailsPanelView {
                 HOLDER_W, HOLDER_H,
                 HOLDER_W, HOLDER_H);
 
+        // Build rows if needed
         if (dirty) {
             rebuildRows();
             dirty = false;
         }
 
+        // Clip text to the text area
         int clipX = detailsOriginX + TEXT_INSET_LEFT;
         int clipY = detailsOriginY + TEXT_INSET_TOP;
         int clipW = (TEXT_INSET_RIGHT - TEXT_INSET_LEFT);
@@ -150,25 +156,30 @@ public final class DetailsPanelView {
         drawRows(gg, clipX, clipY, clipW, clipH);
         gg.disableScissor();
 
+        // Draw scroller knob AFTER text (on top)
         int scrollerDrawX = detailsOriginX + SCROLLER_X;
         int scrollerDrawY = detailsOriginY + currentScrollerTopY();
         gg.blit(scrollerTex(), scrollerDrawX, scrollerDrawY, 0, 0, SCROLLER_W, SCROLLER_H, SCROLLER_W, SCROLLER_H);
     }
 
-    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) { }
+    /** Overlay (optional). */
+    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) {
+        // no overlay for now
+    }
 
     // -------------- Input ----------------
 
     public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         if (!isInsideTextOrBar(mouseX, mouseY)) return false;
         double lineHeight = lineHeight();
-        double deltaPx = -delta * WHEEL_LINES * lineHeight;
+        double deltaPx = -delta * WHEEL_LINES * lineHeight; // wheel up -> negative scroll (move view up)
         setScrollOffset(scrollOffset + deltaPx);
         return true;
     }
 
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) return false;
+        if (button != 0) return false; // left click only for dragging
+        // Check if click on scroller knob
         int sx = detailsOriginX + SCROLLER_X;
         int sy = detailsOriginY + currentScrollerTopY();
         if (hit(mouseX, mouseY, sx, sy, SCROLLER_W, SCROLLER_H)) {
@@ -176,6 +187,7 @@ public final class DetailsPanelView {
             dragYOffset = (int)mouseY - sy;
             return true;
         }
+        // Click on holder: jump scroller toward click and start drag
         int hx = detailsOriginX + HOLDER_X;
         int hy = detailsOriginY + HOLDER_Y;
         if (hit(mouseX, mouseY, hx, hy, HOLDER_W, HOLDER_H)) {
@@ -214,6 +226,7 @@ public final class DetailsPanelView {
         for (Row r : rows) {
             for (FormattedCharSequence line : r.lines) {
                 int lineH = (int)lineHeight();
+                // Vertical clip test
                 if (yCursor + lineH >= y && yCursor <= y + h) {
                     int color = r.color;
                     gg.drawString(font, line, x, yCursor, color, false);
@@ -232,12 +245,16 @@ public final class DetailsPanelView {
     private void rebuildRows() {
         rows.clear();
 
+        // Suppress ALL details during an active infusion lock.
         if (isInfusionLocked()) {
             contentHeight = 0.0;
             clampScrollToContent();
             return;
         }
 
+        // Subject item:
+        // - Prefer slot 0 (input) if present.
+        // - Else, use slot 2 **only if it's a REAL (non-preview) result** after infusion.
         ItemStack subj = ItemStack.EMPTY;
         try {
             var menu = screen.getMenu();
@@ -254,36 +271,51 @@ public final class DetailsPanelView {
         final RitualType ritual = screen.getMenu().ritual();
         final int width = TEXT_INSET_RIGHT - TEXT_INSET_LEFT;
 
+        // Item line (so user sees we detected the subject) — now white
         String itemName = subj.isEmpty() ? "—" : subj.getHoverName().getString();
-        addWrapped(itemName, ChatFormatting.AQUA, width);
+        addWrapped(itemName, ChatFormatting.WHITE, width);
         addBlank();
 
+        // Section: Next attempt preview
         addHeader("Next attempt");
         Double ruleStep = uniqueRuleStepForThisItem(subj, ritual);
-        if (ruleStep != null) addWrapped(BULLET + "Per-upgrade boost: " + pct1(ruleStep), ChatFormatting.GRAY, width);
-        else addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.GRAY, width);
+        if (ruleStep != null) {
+            addWrapped(BULLET + "Per-upgrade boost: " + pct1(ruleStep), ChatFormatting.WHITE, width);
+        } else {
+            addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.WHITE, width);
+        }
 
+        // Chance line with reputation breakdown (fix double and missing sign)
         ChanceParts chance = computeChanceWithRep(subj, ritual);
-        String repStr = (chance.repUnified >= 0 ? "+" : "") + PCT1.format(chance.repBonus * 100.0) +
-                "% from " + (chance.repUnified >= 0 ? "+" : "") + PCT0.format(chance.repUnified) + " rep";
-        addWrapped(BULLET + "Chance: " + PCT1.format(chance.total * 100.0) + "%  ("
-                + PCT1.format(chance.base * 100.0) + "% + " + repStr + ")", ChatFormatting.GRAY, width);
+        String repBonusStr = (chance.repBonus >= 0 ? "+" : "")
+                + PCT1.format(chance.repBonus * 100.0) + "%"; // <-- removed Math.abs()
+        String repUnifiedStr = (chance.repUnified >= 0 ? "+" : "")
+                + PCT0.format(chance.repUnified);
 
+        addWrapped(BULLET + "Chance: " + PCT1.format(chance.total * 100.0) + "%  ("
+                + PCT1.format(chance.base * 100.0) + "% " + repBonusStr
+                + " from " + repUnifiedStr + " rep)", ChatFormatting.WHITE, width);
+
+        // Divider
         addBlank();
 
+        // Section: Totals (accumulated) — white
         addHeader("Totals");
         buildTotals(subj, width);
 
         addBlank();
 
+        // Section: Recent history — white
         addHeader("Recent history");
         buildRecentHistory(subj, width);
 
         addBlank();
 
+        // Section: Possible upgrades for this item (filtered by present attributes) — white
         addHeader("Possible upgrades");
         buildPossibleUpgradesForItem(subj, ritual, width);
 
+        // Compute content height
         int total = 0;
         for (Row r : rows) {
             total += r.lines.size() * ((int)lineHeight() + LINE_SPACING);
@@ -292,10 +324,12 @@ public final class DetailsPanelView {
         clampScrollToContent();
     }
 
+    // ----- Content builders -----
+
     private void buildTotals(ItemStack s, int width) {
         Map<String, TotalsInfo> tot = readTotalsWithCounts(s);
         if (tot.isEmpty()) {
-            addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
+            addWrapped(BULLET + "—", ChatFormatting.WHITE, width);
             return;
         }
         for (var e : tot.entrySet()) {
@@ -305,7 +339,7 @@ public final class DetailsPanelView {
             String line = BULLET + display + " " +
                     (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%" +
                     " (+" + count + ")";
-            addWrapped(line, ChatFormatting.GRAY, width);
+            addWrapped(line, ChatFormatting.WHITE, width);
         }
     }
 
@@ -313,6 +347,7 @@ public final class DetailsPanelView {
     private Double uniqueRuleStepForThisItem(ItemStack s, RitualType ritual) {
         if (s == null || s.isEmpty()) return null;
 
+        // Which attributes are actually present on the item?
         Set<ResourceLocation> present = new java.util.LinkedHashSet<>();
         try {
             ItemAttributeModifiers cur = s.getAttributeModifiers();
@@ -340,16 +375,20 @@ public final class DetailsPanelView {
             double step = Math.max(0.0, base) * Math.max(0.0, mult);
             if (step <= 0.0) continue;
 
-            if (unique == null) unique = step;
-            else if (Math.abs(step - unique) > 1.0e-9) return null;
+            if (unique == null) {
+                unique = step;
+            } else if (Math.abs(step - unique) > 1.0e-9) {
+                // Different per-attr steps -> no single "unique" value
+                return null;
+            }
         }
-        return unique;
+        return unique; // could be null if nothing matched
     }
 
     private void buildRecentHistory(ItemStack s, int width) {
         List<HistEvent> events = readHistory(s);
         if (events.isEmpty()) {
-            addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
+            addWrapped(BULLET + "—", ChatFormatting.WHITE, width);
             return;
         }
 
@@ -363,15 +402,17 @@ public final class DetailsPanelView {
             String display = resolveAttrDisplayName(ev.attrId);
             String amount = (ev.appliedPercent >= 0 ? "+" : "") + PCT1.format(ev.appliedPercent * 100.0) + "%";
 
+            // Default row color = white; styled segment overrides for the jump
             Component line = Component.literal(BULLET)
                     .append(Component.literal("L" + ev.levelBefore + "→L" + ev.levelAfter).withStyle(jumpColor))
                     .append(Component.literal("  " + display + "  " + amount));
 
-            addWrapped(line, mapColor(ChatFormatting.GRAY), width);
+            addWrapped(line, mapColor(ChatFormatting.WHITE), width);
         }
     }
 
     private void buildPossibleUpgradesForItem(ItemStack s, RitualType ritual, int width) {
+        // Determine present attributes on the item (current + defaults)
         Set<ResourceLocation> present = new LinkedHashSet<>();
         try {
             ItemAttributeModifiers cur = s.getAttributeModifiers();
@@ -393,7 +434,7 @@ public final class DetailsPanelView {
         int shown = 0;
         for (var rule : snap.attributes) {
             if (!rule.enabled) continue;
-            if (!present.contains(rule.id)) continue;
+            if (!present.contains(rule.id)) continue; // filter to attributes actually on the item
             double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
             double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
             if (step <= 0.0) continue;
@@ -401,14 +442,21 @@ public final class DetailsPanelView {
             String display = resolveAttrDisplayName(rule.id.toString());
             String dir = rule.direction == UpgradeServerConfig.Direction.INCREASE ? "+" : "−";
             String line = BULLET + display + "  (" + dir + PCT1.format(step * 100.0) + "% per upgrade)";
-            addWrapped(line, ChatFormatting.GRAY, width);
+            addWrapped(line, ChatFormatting.WHITE, width);
             shown++;
         }
-        if (shown == 0) addWrapped(BULLET + "—", ChatFormatting.DARK_GRAY, width);
+        if (shown == 0) {
+            addWrapped(BULLET + "—", ChatFormatting.WHITE, width);
+        }
     }
 
+    // ----- Chance with reputation -----
+
     private static final class ChanceParts {
-        final double base; final double repBonus; final double total; final double repUnified;
+        final double base;      // base chance fraction
+        final double repBonus;  // reputation bonus fraction (can be negative)
+        final double total;     // clamped total
+        final double repUnified;
         ChanceParts(double base, double repBonus, double total, double repUnified) {
             this.base = base; this.repBonus = repBonus; this.total = total; this.repUnified = repUnified;
         }
@@ -416,7 +464,7 @@ public final class DetailsPanelView {
 
     private ChanceParts computeChanceWithRep(ItemStack s, RitualType ritual) {
         int currentLevel = parsePlusLevel(s);
-        double base = UpgradeService.getSuccessChance(currentLevel);
+        double base = UpgradeService.getSuccessChance(currentLevel); // server model (base)
 
         var snap = UpgradeServerConfig.snapshot();
         double unified = screen.getRepUnified();
@@ -428,6 +476,8 @@ public final class DetailsPanelView {
         double total = Mth.clamp(base + repBonus, 0.0, 1.0);
         return new ChanceParts(base, repBonus, total, unified);
     }
+
+    // -------------- Small helpers ----------------
 
     private boolean isInsideTextOrBar(double mouseX, double mouseY) {
         int x = (int)mouseX - detailsOriginX;
@@ -482,11 +532,12 @@ public final class DetailsPanelView {
 
     private void addWrapped(Component text, int defaultColor, int width) {
         Font font = screen.getMinecraft().font;
-        List<FormattedCharSequence> seq = font.split(text, width);
+        List<FormattedCharSequence> seq = font.split(text, width); // preserves per-segment styles
         rows.add(new Row(seq, defaultColor));
     }
 
     private void addWrapped(String text, ChatFormatting color, int width) {
+        // Use the row's default color for the whole line (no per-segment styles here).
         addWrapped(Component.literal(text), mapColor(color), width);
     }
 
@@ -530,9 +581,11 @@ public final class DetailsPanelView {
         return s.replace('_', ' ').replace('.', ' ');
     }
 
+    // --- Totals + counts ---
+
     private static final class TotalsInfo {
         final double sumPercent; // fraction
-        final int count;         // net upgrades (successes - downgrades)
+        final int count;         // number of upgrades recorded (net)
         TotalsInfo(double sumPercent, int count) {
             this.sumPercent = sumPercent;
             this.count = count;
@@ -549,7 +602,7 @@ public final class DetailsPanelView {
             for (String key : totals.getAllKeys()) {
                 var a = totals.getCompound(key);
                 double sumPct = a.getDouble("sumPercent"); // fraction
-                int count = a.getInt("count");             // net
+                int count = a.getInt("count");
                 out.put(key, new TotalsInfo(sumPct, Math.max(0, count)));
             }
         } catch (Throwable ignored) {}
@@ -576,7 +629,7 @@ public final class DetailsPanelView {
                 h.attrId = ev.getString("attribute");
                 h.levelBefore = ev.getInt("levelBefore");
                 h.levelAfter  = ev.getInt("levelAfter");
-                h.appliedPercent = ev.getDouble("stepPercent"); // signed
+                h.appliedPercent = ev.getDouble("stepPercent");
                 out.add(h);
             }
         } catch (Throwable ignored) {}
@@ -593,8 +646,10 @@ public final class DetailsPanelView {
 
     private static String pct1(double frac) { return PCT1.format(frac * 100.0) + "%"; }
 
+    // --- New local helpers ---
+
     private boolean isInfusionLocked() {
-        var menu = screen.getMenu();
+        AngelDemonMenu menu = screen.getMenu();
         if (menu == null) return false;
         return menu.getClientLockEndGameTime() > 0L;
     }
@@ -605,13 +660,23 @@ public final class DetailsPanelView {
             CustomData cd = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
             if (cd == null) return false;
             return cd.copyTag().getBoolean("iu_preview");
-        } catch (Throwable ignored) { return false; }
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
+    // -------------- Row struct ----------------
     private static final class Row {
         final List<FormattedCharSequence> lines;
         final int color;
-        Row(List<FormattedCharSequence> lines, int color) { this.lines = lines; this.color = color; }
-        static Row single(Component c, int color) { return new Row(List.of(c.getVisualOrderText()), color); }
+
+        Row(List<FormattedCharSequence> lines, int color) {
+            this.lines = lines;
+            this.color = color;
+        }
+
+        static Row single(Component c, int color) {
+            return new Row(List.of(c.getVisualOrderText()), color);
+        }
     }
 }
