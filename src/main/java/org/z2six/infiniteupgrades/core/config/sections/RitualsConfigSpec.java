@@ -44,11 +44,11 @@ public final class RitualsConfigSpec {
 
         successSfxVolume = B.comment(
                 "Client volume for infusion SUCCESS SFX. 1.0 = full volume, 0.0 = muted."
-        ).defineInRange("successSfxVolume", 0.35, 0.0, 1.0);
+        ).defineInRange("successSfxVolume", 0.65, 0.0, 1.0);
 
         failSfxVolume = B.comment(
                 "Client volume for infusion FAIL SFX. 1.0 = full volume, 0.0 = muted."
-        ).defineInRange("failSfxVolume", 0.5, 0.0, 1.0);
+        ).defineInRange("failSfxVolume", 0.8, 0.0, 1.0);
 
         B.pop();
     }

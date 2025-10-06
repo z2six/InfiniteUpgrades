@@ -43,8 +43,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static final int GROUP_H = 222;
 
     // Rep bar dims
-    private static final int REP_W = 96;
-    private static final int REP_H = 11;
+    private static final int REP_W = 108;
+    private static final int REP_H = 13;
 
     // Fudge used by subviews (keep here as well for computing rep bar vertical anchor)
     private static final int DRAW_FUDGE_Y = -1;
@@ -99,11 +99,20 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     }
 
     /** Reputation textures (repbar + pointer). */
-    private ResourceLocation repTex() {
-        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/repbar.png");
-    }
     private ResourceLocation repPointerTex() {
         return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/pointer.png");
+    }
+    private ResourceLocation repBgHalfTex() {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
+                "textures/gui/container/reputation/background_half.png");
+    }
+    private ResourceLocation repBgCelestialTex() {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
+                "textures/gui/container/reputation/background_celestial.png");
+    }
+    private ResourceLocation repBgDemonicTex() {
+        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
+                "textures/gui/container/reputation/background_demonic.png");
     }
 
     // Expose latest rep snapshot for DetailsPanelView (for chance preview)
@@ -125,7 +134,14 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // Rep bar anchor...
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
-        repView = new ReputationBarView(this, repX, repY, repTex(), repPointerTex());
+        repView = new ReputationBarView(
+                this,
+                repX, repY,
+                repBgHalfTex(),
+                repBgCelestialTex(),
+                repBgDemonicTex(),
+                repPointerTex()
+        );
 
         // Add & init subview widgets
         mainView.onInit();

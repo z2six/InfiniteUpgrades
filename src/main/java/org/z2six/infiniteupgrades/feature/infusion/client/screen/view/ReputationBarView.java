@@ -1,4 +1,5 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/ReputationBarView.java
+// REPLACE the whole file contents with this updated version
+
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;
@@ -14,35 +15,43 @@ import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScree
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/ReputationBarView.java
+ * Renders the reputation bar (108x13) with a state-based background and an 8x11 pointer.
  *
- * Renders the reputation bar (96x11) and pointer (8x11), and shows a tooltip on hover:
- *  - Angel: <signed angel rep> rep (<signed %> chance)
- *  - Demon: <signed demon rep> rep (<signed %> chance)
- *  - Infusions till max: <N> Demon, <M> Angel
+ * Backgrounds:
+ *  - background_half.png      : default (and temporary placeholder for “halfway” states)
+ *  - background_celestial.png : shown when at +max (angel cap)
+ *  - background_demonic.png   : shown when at -max (demon cap)
  *
- * Notes:
- * - Chance lines are computed exactly like DetailsPanelView (repBonusPerPoint + clamp).
- * - "Infusions till max" assumes successive *successful* infusions (uses repDeltaSuccess magnitude).
- *   If repDeltaSuccess is 0, it falls back to repDeltaFail; if both are 0, we display "∞".
+ * Future: halfway-to-demon / halfway-to-angel art. Code already branches; currently both fall back to background_half.png.
+ *
+ * Pointer logic unchanged; it spans the full bar width and is centered at 0 rep.
  */
 public final class ReputationBarView {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // Texture sizes (exact)
-    public static final int BAR_W = 96;
-    public static final int BAR_H = 11;
+    // New bar size (exact pixels)
+    public static final int BAR_W = 108;
+    public static final int BAR_H = 13;
+
+    // Pointer size stays the same
     public static final int PTR_W = 8;
     public static final int PTR_H = 11;
 
     // Formatting
     private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
 
-    // Resources
-    private final ResourceLocation barTex;
+    // Resources (all resolved up-front)
+    private final ResourceLocation bgHalf;        // default
+    private final ResourceLocation bgCelestial;   // angel max
+    private final ResourceLocation bgDemonic;     // demon max
+
+    // When you add “halfway to side” textures later, just change these to your new paths.
+    // For now, they intentionally point to bgHalf so visuals don’t change until art arrives.
+    private final ResourceLocation bgHalfToAngel; // TODO swap to e.g. background_half_angel.png later
+    private final ResourceLocation bgHalfToDemon; // TODO swap to e.g. background_half_demon.png later
+
     private final ResourceLocation ptrTex;
 
     // Parent + anchor
@@ -54,31 +63,45 @@ public final class ReputationBarView {
     private double unified = 0.0;
     private int repMaxForView = 100; // default; updated from server snapshot
 
-    // For one-time init logging / resource verification
+    // One-time init logging / resource verification
     private boolean loggedInit = false;
-    private boolean barExists = true;
     private boolean ptrExists = true;
+    private boolean halfExists = true;
+    private boolean angelExists = true;
+    private boolean demonExists = true;
 
     public ReputationBarView(AngelDemonScreen screen, int x, int y,
-                             ResourceLocation barTex, ResourceLocation pointerTex) {
+                             ResourceLocation backgroundHalf,
+                             ResourceLocation backgroundCelestial,
+                             ResourceLocation backgroundDemonic,
+                             ResourceLocation pointerTex) {
         this.screen = screen;
         this.baseX = x;
         this.baseY = y;
-        this.barTex = barTex;
+
+        this.bgHalf = backgroundHalf;
+        this.bgCelestial = backgroundCelestial;
+        this.bgDemonic = backgroundDemonic;
+
+        // Pre-wire future “halfway” art — currently routed to the neutral half background.
+        this.bgHalfToAngel = backgroundHalf;
+        this.bgHalfToDemon = backgroundHalf;
+
         this.ptrTex = pointerTex;
 
         // Proactively check that resources exist; log if missing.
         try {
             Minecraft mc = screen.getMinecraft();
             if (mc != null && mc.getResourceManager() != null) {
-                barExists = resourceExists(mc, barTex);
-                ptrExists = resourceExists(mc, pointerTex);
-                if (!barExists) {
-                    LOG.error("[RepBar] Missing texture: {}", barTex);
-                }
-                if (!ptrExists) {
-                    LOG.error("[RepBar] Missing texture: {}", pointerTex);
-                }
+                halfExists  = resourceExists(mc, bgHalf);
+                angelExists = resourceExists(mc, bgCelestial);
+                demonExists = resourceExists(mc, bgDemonic);
+                ptrExists   = resourceExists(mc, pointerTex);
+
+                if (!halfExists)  LOG.error("[RepBar] Missing texture: {}", bgHalf);
+                if (!angelExists) LOG.error("[RepBar] Missing texture: {}", bgCelestial);
+                if (!demonExists) LOG.error("[RepBar] Missing texture: {}", bgDemonic);
+                if (!ptrExists)   LOG.error("[RepBar] Missing texture: {}", pointerTex);
             }
         } catch (Throwable t) {
             LOG.warn("[RepBar] Resource existence check failed: {}", t.toString());
@@ -101,73 +124,69 @@ public final class ReputationBarView {
         LOG.debug("[RepBar] acceptServerValues unified={} repMax={}", unified, this.repMaxForView);
     }
 
-    /** Called each tick; nothing to animate yet. */
     public void tick() {
-        // No-op
+        // No-op (reserved for future pointer easing/animation)
     }
 
     /**
-     * Render the bar and pointer.
-     * Pointer is centered horizontally at baseX + BAR_W/2 for 0 rep.
-     * -repMax -> pointer center at baseX (left edge)
-     * +repMax -> pointer center at baseX + BAR_W (right edge)
-     * Note: pointer is 8px wide; its left draw X is (center - PTR_W/2).
+     * Render:
+     * - Choose background by state (max demon / max angel / halfway-to-side / default half).
+     * - Draw background at (baseX, baseY).
+     * - Draw pointer centered along the BAR width based on unified rep.
      */
     public void render(GuiGraphics gg) {
-        // One-time init log
         if (!loggedInit) {
             loggedInit = true;
             LOG.debug("[RepBar] init: unified={} repMax={} (client snapshot)", unified, repMaxForView);
         }
 
-        // Draw BAR
-        if (barExists) {
-            gg.blit(barTex,
-                    baseX, baseY,
-                    0, 0,
-                    BAR_W, BAR_H,
-                    BAR_W, BAR_H); // exact pixels, no scaling
-        }
+        // Pick proper background
+        ResourceLocation bg = chooseBackground();
 
-        // Normalize to [-1..+1] using the real repMax from server
+        // Draw BAR background (no scaling)
+        gg.blit(bg, baseX, baseY, 0, 0, BAR_W, BAR_H, BAR_W, BAR_H);
+
+        // Normalize to [-1..+1]
         double normalized = clamp(unified / (double)repMaxForView, -1.0, 1.0);
 
-        // Compute center X of the pointer along the BAR
-        double centerX = baseX + (BAR_W * (normalized + 1.0) / 2.0);
+        // Pointer travel range shrinks by side margins
+                final int SIDE_MARGIN = 11; // px inward from each side where pointer stops
 
-        // Left X for drawing (pointer is 8px wide; center anchor)
-        int ptrLeftX = (int)Math.round(centerX - PTR_W / 2.0);
-        int ptrTopY  = baseY; // pointer shares same Y top as bar
+        // Effective width that the pointer can move within
+                double usableWidth = BAR_W - (SIDE_MARGIN * 2);
 
-        // Draw POINTER
+        // Map normalized [-1..+1] → [0..usableWidth]
+                double offset = (usableWidth * (normalized + 1.0) / 2.0);
+
+        // Compute center position inside the image, offset by left margin
+                double centerX = baseX + SIDE_MARGIN + offset;
+
+        // Convert to left draw X (center-anchor the 8-px pointer)
+                int ptrLeftX = (int)Math.round(centerX - PTR_W / 2.0);
+
+        // Align pointer to the bar’s top; (it’s 11px tall vs bar 13px — looks good slightly inset)
+        int ptrTopY = baseY;
+
         if (ptrExists) {
-            gg.blit(ptrTex,
-                    ptrLeftX, ptrTopY,
-                    0, 0,
-                    PTR_W, PTR_H,
-                    PTR_W, PTR_H); // exact pixels, no scaling
+            gg.blit(ptrTex, ptrLeftX, ptrTopY, 0, 0, PTR_W, PTR_H, PTR_W, PTR_H);
         }
     }
 
-    /** Draw a tooltip when hovering the reputation bar. */
+    /** Tooltip on hover. */
     public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) {
         if (!isHovering(mouseX, mouseY)) return;
 
-        // Pull server config snapshot (client-side accessible)
         var cfg = UpgradeServerConfig.snapshot();
 
-        // Signed rep for each side (positive means aligned with that side)
         int angelRepSigned = (int)Math.round(unified);
         int demonRepSigned = (int)Math.round(-unified);
 
-        // Chance effects (mirror DetailsPanelView: no oppositePenaltyFactor here to avoid UI mismatch)
         double bonusPerPoint = cfg.repBonusPerPoint;
         double clamp = Math.max(0.0, cfg.repBonusClamp);
 
-        double angelBonus = clampSym(angelRepSigned * bonusPerPoint, clamp); // fraction
-        double demonBonus = clampSym(demonRepSigned * bonusPerPoint, clamp); // fraction
+        double angelBonus = clampSym(angelRepSigned * bonusPerPoint, clamp);
+        double demonBonus = clampSym(demonRepSigned * bonusPerPoint, clamp);
 
-        // Infusions till max, assuming successes toward that side
         double step = Math.abs(cfg.repDeltaSuccess) > 1.0e-9
                 ? Math.abs(cfg.repDeltaSuccess)
                 : Math.abs(cfg.repDeltaFail);
@@ -176,8 +195,8 @@ public final class ReputationBarView {
         if (step <= 1.0e-12) {
             stepsLine = "Infusions till max: ∞ Demon, ∞ Angel";
         } else {
-            double distDemon = Math.max(0.0, (unified + repMaxForView));          // to -repMax
-            double distAngel = Math.max(0.0, (repMaxForView - unified));          // to +repMax
+            double distDemon = Math.max(0.0, (unified + repMaxForView)); // to -repMax
+            double distAngel = Math.max(0.0, (repMaxForView - unified)); // to +repMax
             long stepsDemon = (long)Math.ceil(distDemon / step);
             long stepsAngel = (long)Math.ceil(distAngel / step);
             stepsLine = "Infusions till max: " + stepsDemon + " Demon, " + stepsAngel + " Angel";
@@ -188,12 +207,28 @@ public final class ReputationBarView {
         lines.add(Component.literal("Demon: " + signedInt(demonRepSigned) + " rep (" + signedPct(demonBonus) + " chance)"));
         lines.add(Component.literal(stepsLine));
 
-        // Render tooltip
         var font = screen.getMinecraft().font;
         List<net.minecraft.util.FormattedCharSequence> ordered = lines.stream()
                 .map(Component::getVisualOrderText)
                 .toList();
         gg.renderTooltip(font, ordered, mouseX, mouseY);
+    }
+
+    // -------- state/background selection --------
+
+    private ResourceLocation chooseBackground() {
+        double n = (repMaxForView == 0) ? 0.0 : unified / (double)repMaxForView;
+
+        // Max caps (exact ends)
+        if (n >= 1.0 - 1e-12 && angelExists) return bgCelestial;
+        if (n <= -1.0 + 1e-12 && demonExists) return bgDemonic;
+
+        // Future half-way states (currently point at bgHalf until you add textures)
+        if (n >= 0.5) return bgHalfToAngel; // TODO: swap to your dedicated halfway-to-angel art
+        if (n <= -0.5) return bgHalfToDemon; // TODO: swap to your dedicated halfway-to-demon art
+
+        // Default
+        return bgHalf;
     }
 
     // ---------------- helpers ----------------
