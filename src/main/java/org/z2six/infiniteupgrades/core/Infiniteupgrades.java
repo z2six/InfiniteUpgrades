@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.feature.angel.client.render.AngelRenderer;
 import org.z2six.infiniteupgrades.feature.demon.client.render.DemonRenderer;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientTicker;
+import org.z2six.infiniteupgrades.core.config.UpgradeClientConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.core.registry.ModEntityTypes;
@@ -132,10 +133,15 @@ public class Infiniteupgrades {
         // SERVER-authoritative upgrade config
         modContainer.registerConfig(ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
 
+        // NEW: CLIENT-only upgrade config (infusion SFX volumes, etc.)
+        modContainer.registerConfig(ModConfig.Type.CLIENT, UpgradeClientConfig.SPEC);
+
         // ✅ Correct: Mod config events belong to the MOD event bus, not the common bus
         modEventBus.addListener(UpgradeServerConfig::onServerConfigReload);
+        // Optional: log client config reloads too
+        modEventBus.addListener(UpgradeClientConfig::onClientConfigReload);
 
-        LOGGER.debug("[Infiniteupgrades] Registered SERVER config for upgrades");
+        LOGGER.debug("[Infiniteupgrades] Registered SERVER and CLIENT configs for upgrades");
         LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
@@ -155,13 +161,13 @@ public class Infiniteupgrades {
         }
     }
 
-    private void registerEntityAttributes(final EntityAttributeCreationEvent evt) {
+    private void registerEntityAttributes(final net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent evt) {
         evt.put(ModEntityTypes.ANGEL.get(), AngelEntity.createAttributes().build());
         evt.put(ModEntityTypes.DEMON.get(), DemonEntity.createAttributes().build()); // NEW
     }
 
     @SubscribeEvent
-    public void onServerStarting(ServerStartingEvent event) {
+    public void onServerStarting(net.neoforged.neoforge.event.server.ServerStartingEvent event) {
         LOGGER.info("[Infiniteupgrades] Server starting");
     }
 

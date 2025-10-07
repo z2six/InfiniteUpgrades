@@ -17,6 +17,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.view.DetailsPanelView;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.view.MainGuiView;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.view.ProgressFillView;
@@ -103,16 +104,22 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         return ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "textures/gui/container/reputation/pointer.png");
     }
     private ResourceLocation repBgHalfTex() {
-        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
-                "textures/gui/container/reputation/background_half.png");
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/reputation/background_half.png"
+        );
     }
     private ResourceLocation repBgCelestialTex() {
-        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
-                "textures/gui/container/reputation/background_celestial.png");
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/reputation/background_celestial.png"
+        );
     }
     private ResourceLocation repBgDemonicTex() {
-        return ResourceLocation.fromNamespaceAndPath("infiniteupgrades",
-                "textures/gui/container/reputation/background_demonic.png");
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/reputation/background_demonic.png"
+        );
     }
 
     // Expose latest rep snapshot for DetailsPanelView (for chance preview)
@@ -151,6 +158,10 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
         // Resume any pending infusion lock/animation after reopen
         ModNet.requestPendingState();
+
+        // NEW: If the client backlogged the infusion animation while screen was closed, play it now.
+        // This triggers both SFX and overlay animation in sync as soon as the GUI opens.
+        InfuseClientEffects.onScreenOpenedPlayBacklog();
 
         // Ensure details starts fresh
         if (detailsView != null) detailsView.markDirty();
