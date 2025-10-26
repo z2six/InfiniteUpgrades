@@ -42,7 +42,7 @@ public class DemonEntity extends Mob implements GeoEntity {
     private final AnimatableInstanceCache geckoCache = GeckoLibUtil.createInstanceCache(this);
 
     // Name of the animation in your demon.animation.json → "idle"
-    private static final RawAnimation IDLE = RawAnimation.begin().thenLoop("idle");
+    private static final RawAnimation IDLE = RawAnimation.begin().thenLoop("Idle");
 
     private static final EntityDataAccessor<BlockPos> ANCHOR_POS =
             SynchedEntityData.defineId(DemonEntity.class, EntityDataSerializers.BLOCK_POS);
