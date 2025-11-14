@@ -89,6 +89,72 @@ public final class UpgradeService {
         }
     }
 
+    /**
+     * Compute how many soul units are required to go from the current level to the next level.
+     *
+     * Model:
+     *   Let nextLevel = currentLevel + 1.
+     *
+     *   1) If a manual override exists for nextLevel, return that.
+     *   2) Otherwise, compute:
+     *
+     *        cost(L -> L+1) = baseCost * (expBase ^ L) * scale
+     *
+     *      where all three (baseCost, expBase, scale) come from the Souls config.
+     *
+     *   - baseCost >= 0
+     *   - expBase >= 1.0 (clamped)
+     *   - scale   >= 0
+     *
+     * The return value is an int >= 0, clamped to Integer.MAX_VALUE.
+     */
+    public static int getSoulCostForNextLevel(int currentLevel) {
+        try {
+            Snapshot s = UpgradeServerConfig.snapshot();
+            UpgradeServerConfig.SoulsConfig sc = s.souls;
+
+            int levelIndex = Math.max(0, currentLevel);
+            int nextLevel  = levelIndex + 1;
+
+            // 1) Manual override wins, if present
+            Integer override = sc.upgradeCostOverrides.get(nextLevel);
+            if (override != null) {
+                int val = Math.max(0, override);
+                LOG.debug("[UpgradeService] Soul cost override used for level {} -> {}: {}", levelIndex, nextLevel, val);
+                return val;
+            }
+
+            // 2) Exponential model
+            double base   = Math.max(0.0, sc.upgradeBaseCost);
+            double expBase = sc.upgradeExponentialBase;
+            if (expBase < 1.0) expBase = 1.0;
+            double scale  = Math.max(0.0, sc.upgradeExponentialScale);
+
+            // cost(L -> L+1) = base * (expBase^L) * scale
+            double d = base * Math.pow(expBase, levelIndex) * scale;
+
+            if (d <= 0.0) {
+                LOG.debug("[UpgradeService] Soul cost for level {} -> {} computed as <= 0 (value={}); returning 0",
+                        levelIndex, nextLevel, d);
+                return 0;
+            }
+            if (d > Integer.MAX_VALUE) {
+                LOG.warn("[UpgradeService] Soul cost for level {} -> {} overflow (value={}); clamping to {}",
+                        levelIndex, nextLevel, d, Integer.MAX_VALUE);
+                return Integer.MAX_VALUE;
+            }
+
+            int result = (int) Math.round(d);
+            LOG.debug("[UpgradeService] Soul cost for level {} -> {} is {} (base={}, expBase={}, scale={})",
+                    levelIndex, nextLevel, result, base, expBase, scale);
+            return result;
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] getSoulCostForNextLevel failed: {}", t.toString());
+            // On error we return 0 so we *do not* accidentally eat souls.
+            return 0;
+        }
+    }
+
     // -------------------- Public ritual API --------------------
 
     public static Result tryUpgradeWithRitual(ItemStack original, RandomSource rand, RitualType ritual) {

@@ -5,6 +5,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -12,13 +13,7 @@ import java.util.Set;
 import static org.z2six.infiniteupgrades.core.config.ConfigParsing.*;
 
 /**
- * Soul orb drop settings (friendly edition).
- *
- * You can enable/disable drops, choose how tiers are picked, clamp who can drop,
- * and even spawn light at the drop location.
- *
- * NEW:
- *  - collectRangeBlocks: max distance at which a player with a Soul Cage attracts orbs.
+ * Soul orb drop + soul-upgrade cost settings.
  */
 public final class SoulsConfigSpec {
 
@@ -45,8 +40,15 @@ public final class SoulsConfigSpec {
     public final ModConfigSpec.BooleanValue spawnLights;
     public final ModConfigSpec.IntValue     lightRadiusBlocks;
 
-    // NEW: collection
+    // Collection
     public final ModConfigSpec.IntValue     collectRangeBlocks;
+
+    // ---------------- NEW: Upgrade soul-cost fields ----------------
+    public final ModConfigSpec.DoubleValue  upgradeBaseCost;
+    public final ModConfigSpec.DoubleValue  upgradeExponentialBase;
+    public final ModConfigSpec.DoubleValue  upgradeExponentialScale;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> upgradeCostOverridesKV;
+    // ----------------------------------------------------------------
 
     private SoulsConfigSpec(ModConfigSpec.Builder B) {
         B.push("souls");
@@ -116,7 +118,7 @@ public final class SoulsConfigSpec {
         // ---- Optional light ----
         spawnLights = B.comment(
                 "If true, spawn a small light where the soul orb appears (cosmetic)."
-        ).define("spawnLights", true);
+        ).define("spawnLights", false);
 
         lightRadiusBlocks = B.comment(
                 "Approximate radius of the placed light (in blocks).",
@@ -130,6 +132,28 @@ public final class SoulsConfigSpec {
                 "Once homing starts, the orb continues accelerating until picked up."
         ).defineInRange("collectRangeBlocks", 6, 1, 64);
 
+        // ---------------- NEW: soul-upgrade cost section ----------------
+        upgradeBaseCost = B.comment(
+                "Base cost for upgrading from level L → L+1 before exponential/scale."
+        ).defineInRange("upgradeBaseCost", 10.0, 0.0, 1_000_000.0);
+
+        upgradeExponentialBase = B.comment(
+                "Exponential curve base for soul cost.",
+                "Effective cost(L→L+1) = baseCost * (expBase^L) * scale."
+        ).defineInRange("upgradeExponentialBase", 1.25, 1.0, 5.0);
+
+        upgradeExponentialScale = B.comment(
+                "Extra scaling factor applied after exponential.",
+                "Useful to quickly tune difficulty without changing base/expBase."
+        ).defineInRange("upgradeExponentialScale", 1.0, 0.0, 1000.0);
+
+        upgradeCostOverridesKV = B.comment(
+                "Manual soul-cost overrides per level, format: \"LEVEL=COST\".",
+                "Example: [\"1=5\",\"2=10\",\"10=1000\"]",
+                "These override the exponential formula for the given level."
+        ).defineListAllowEmpty("upgradeCostOverrides", List.of(), o -> o instanceof String);
+        // -----------------------------------------------------------------
+
         B.pop();
     }
 
@@ -137,17 +161,17 @@ public final class SoulsConfigSpec {
         return new SoulsConfigSpec(B);
     }
 
+    // snapshot container
     public static final class Snapshot {
+
         public final boolean enabled;
         public final double  dropChance;
         public final SoulsDropModel dropModel;
 
-        // RATIO
         public final double  hpToSoulsRatio;
         public final int     minUnitsForDrop;
         public final Map<String,Integer> tierUnits;
 
-        // HP_THRESHOLDS
         public final Map<String,Double>  tierMinHearts;
 
         public final int     lifetimeSeconds;
@@ -155,20 +179,38 @@ public final class SoulsConfigSpec {
         public final Set<ResourceLocation> whitelist;
         public final Set<ResourceLocation> blacklist;
 
-        // Lights
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
 
-        // Collection
         public final int     collectRangeBlocks;
 
-        public Snapshot(boolean enabled, double dropChance, SoulsDropModel dropModel,
-                        double hpToSoulsRatio, int minUnitsForDrop, Map<String,Integer> tierUnits,
-                        Map<String,Double> tierMinHearts,
-                        int lifetimeSeconds, boolean allowPvP,
-                        Set<ResourceLocation> whitelist, Set<ResourceLocation> blacklist,
-                        boolean spawnLights, int lightRadiusBlocks,
-                        int collectRangeBlocks) {
+        // ---------------- NEW: Upgrade soul-cost fields ----------------
+        public final double upgradeBaseCost;
+        public final double upgradeExponentialBase;
+        public final double upgradeExponentialScale;
+        public final Map<Integer,Integer> upgradeCostOverrides;
+        // ----------------------------------------------------------------
+
+        public Snapshot(
+                boolean enabled,
+                double dropChance,
+                SoulsDropModel dropModel,
+                double hpToSoulsRatio,
+                int minUnitsForDrop,
+                Map<String,Integer> tierUnits,
+                Map<String,Double> tierMinHearts,
+                int lifetimeSeconds,
+                boolean allowPvP,
+                Set<ResourceLocation> whitelist,
+                Set<ResourceLocation> blacklist,
+                boolean spawnLights,
+                int lightRadiusBlocks,
+                int collectRangeBlocks,
+                double upgradeBaseCost,
+                double upgradeExponentialBase,
+                double upgradeExponentialScale,
+                Map<Integer,Integer> upgradeCostOverrides
+        ) {
             this.enabled = enabled;
             this.dropChance = dropChance;
             this.dropModel = dropModel;
@@ -183,19 +225,35 @@ public final class SoulsConfigSpec {
             this.spawnLights = spawnLights;
             this.lightRadiusBlocks = lightRadiusBlocks;
             this.collectRangeBlocks = collectRangeBlocks;
+
+            this.upgradeBaseCost = upgradeBaseCost;
+            this.upgradeExponentialBase = upgradeExponentialBase;
+            this.upgradeExponentialScale = upgradeExponentialScale;
+            this.upgradeCostOverrides = upgradeCostOverrides;
         }
     }
 
     public Snapshot snapshot() {
+
         double chance = clamp01(dropChance.get());
 
         Map<String,Integer> tu = parseTierUnits(tierUnitsKV.get());
-        if (tu.isEmpty()) tu = Map.of("SMALL",1,"MEDIUM",4,"LARGE",8,"EXTRA_LARGE",16);
-        else tu = Collections.unmodifiableMap(tu);
+        if (tu.isEmpty()) {
+            tu = Map.of("SMALL", 1, "MEDIUM", 4, "LARGE", 8, "EXTRA_LARGE", 16);
+        } else {
+            tu = Collections.unmodifiableMap(tu);
+        }
 
         Map<String,Double> tmh = parseTierMinHearts(tierMinHeartsKV.get());
-        if (tmh.isEmpty()) tmh = Map.of("SMALL",0.0,"MEDIUM",10.0,"LARGE",20.0,"EXTRA_LARGE",40.0);
-        else tmh = Collections.unmodifiableMap(tmh);
+        if (tmh.isEmpty()) {
+            tmh = Map.of("SMALL", 0.0, "MEDIUM", 10.0, "LARGE", 20.0, "EXTRA_LARGE", 40.0);
+        } else {
+            tmh = Collections.unmodifiableMap(tmh);
+        }
+
+        // NEW: manual soul-upgrade overrides
+        Map<Integer,Integer> overrides = parseLevelIntMap(upgradeCostOverridesKV.get());
+        overrides = Collections.unmodifiableMap(overrides);
 
         return new Snapshot(
                 enabled.get(),
@@ -211,7 +269,40 @@ public final class SoulsConfigSpec {
                 parseIdSet(blacklistIds.get()),
                 spawnLights.get(),
                 Math.max(0, lightRadiusBlocks.get()),
-                Math.max(1, collectRangeBlocks.get())
+                Math.max(1, collectRangeBlocks.get()),
+                Math.max(0.0, upgradeBaseCost.get()),
+                Math.max(1.0, upgradeExponentialBase.get()),
+                Math.max(0.0, upgradeExponentialScale.get()),
+                overrides
         );
+    }
+
+    // -------- local parser for "LEVEL=COST" -> Map<Integer,Integer> --------
+    private static Map<Integer,Integer> parseLevelIntMap(List<? extends String> raw) {
+        if (raw == null || raw.isEmpty()) return Collections.emptyMap();
+
+        Map<Integer,Integer> out = new LinkedHashMap<>();
+        for (Object o : raw) {
+            if (!(o instanceof String s)) continue;
+            String line = s.trim();
+            if (line.isEmpty()) continue;
+
+            int eq = line.indexOf('=');
+            if (eq <= 0 || eq >= line.length() - 1) continue;
+
+            String left = line.substring(0, eq).trim();
+            String right = line.substring(eq + 1).trim();
+            if (left.isEmpty() || right.isEmpty()) continue;
+
+            try {
+                int level = Integer.parseInt(left);
+                int cost = Integer.parseInt(right);
+                if (level <= 0 || cost < 0) continue;
+                out.put(level, cost);
+            } catch (NumberFormatException ignored) {
+                // ignore bad lines
+            }
+        }
+        return out;
     }
 }

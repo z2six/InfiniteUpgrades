@@ -1,5 +1,6 @@
 // File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/menu/AngelDemonMenu.java
 package org.z2six.infiniteupgrades.feature.infusion.menu;
+import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
 import com.mojang.datafixers.util.Pair;
 import com.mojang.logging.LogUtils;
@@ -124,7 +125,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 if (owner != null && !owner.level().isClientSide) {
                     if (PendingStore.read((net.minecraft.server.level.ServerPlayer)owner).active()) return false;
                 }
-                return stack.is(Items.IRON_INGOT);
+                return SoulCageItem.isCage(stack);
             }
         });
 
@@ -272,6 +273,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     // --------- Server: actual click handling & attempt start ---------
 
+    // --------- Server: actual click handling & attempt start ---------
+
     public void onInfuseButtonPressed(Player player) {
         try {
             if (player == null || player.level().isClientSide) return;
@@ -289,9 +292,15 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack effectiveIn = useOutputAsInput ? out2 : in0;
             ItemStack res         = baseInv.getItem(1);
 
-            // Usual guards
-            if (effectiveIn.isEmpty() || !isCombatItem(effectiveIn)) return;
-            if (res.isEmpty() || !res.is(Items.IRON_INGOT)) return;
+            // Usual guards: must have a combat item + a Soul Cage as resource.
+            if (effectiveIn.isEmpty() || !isCombatItem(effectiveIn)) {
+                LOG.debug("[AngelDemonMenu] Infuse ignored: no valid combat item in input");
+                return;
+            }
+            if (res.isEmpty() || !SoulCageItem.isCage(res)) {
+                LOG.debug("[AngelDemonMenu] Infuse ignored: resource slot does not contain a Soul Cage");
+                return;
+            }
 
             // Is there already a server pending?
             PendingStore.Snapshot snap = PendingStore.read((net.minecraft.server.level.ServerPlayer)player);
@@ -304,14 +313,37 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack originalCopy = effectiveIn.copy();
             int cur = readLevelFromTagOrName(effectiveIn);
 
+            // Determine how many souls this attempt costs
+            int soulCost = 0;
+            try {
+                soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(cur));
+            } catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] getSoulCostForNextLevel failed: {}", t.toString());
+                soulCost = 0;
+            }
+
+            // Verify the Soul Cage actually has enough souls
+            if (!SoulCageItem.hasAtLeast(res, soulCost)) {
+                int available = SoulCageItem.getTotal(res);
+                LOG.debug("[AngelDemonMenu] Infuse ignored: not enough souls in cage (have={}, need={})", available, soulCost);
+                return;
+            }
+
             // Chance model + rep
             double baseChance  = UpgradeService.getSuccessChance(cur);
             double bonus       = Reputation.computeBonusFor(player, ritual);
             double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
 
-            // Consume resource now
-            res.shrink(1);
-            baseInv.setItem(1, res);
+            // Consume soul resource now (server-authoritative, from the cage's NBT)
+            if (soulCost > 0) {
+                boolean consumed = SoulCageItem.consumeUnits(res, soulCost);
+                if (!consumed) {
+                    LOG.warn("[AngelDemonMenu] Infuse aborted: consumeUnits failed after hasAtLeast check (race or NBT error).");
+                    return;
+                }
+                // Ensure container sees updated NBT
+                baseInv.setItem(1, res);
+            }
 
             // Remove the source item from whichever slot we used (server authority)
             withPreviewSuppressed(() -> {
@@ -361,12 +393,13 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 // Persist slots after changes (reflects that we consumed resource and removed the used input slot)
                 persistSlotsToAttachmentServer();
 
-                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (used {} as input)",
+                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (used {} as input, soulCost={})",
                         cur, ritual,
                         String.format("%.3f", baseChance), String.format("%.3f", bonus),
                         String.format("%.3f", finalChance), String.format("%.5f", roll),
                         success, delayTicks,
-                        useOutputAsInput ? "slot2" : "slot0");
+                        useOutputAsInput ? "slot2" : "slot0",
+                        soulCost);
             }
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] onInfuseButtonPressed failed: {}", t.toString());
@@ -424,7 +457,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
             ItemStack in = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);
-            if (in.isEmpty() || !isCombatItem(in) || res.isEmpty() || !res.is(Items.IRON_INGOT)) {
+
+            // Must have a combat item AND a Soul Cage
+            if (in.isEmpty() || !isCombatItem(in) || res.isEmpty() || !SoulCageItem.isCage(res)) {
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
@@ -439,6 +474,25 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             UpgradeServerConfig.Snapshot snap = UpgradeServerConfig.snapshot();
             int maxLevel = snap.maxLevel;
             if (nextLevel > maxLevel) {
+                withPreviewSuppressed(() -> {
+                    baseInv.setItem(2, ItemStack.EMPTY);
+                    previewChancePermille = 0;
+                });
+                return;
+            }
+
+            // Soul cost + availability
+            int soulCost = 0;
+            try {
+                soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel));
+            } catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] updatePreview: getSoulCostForNextLevel failed: {}", t.toString());
+                soulCost = 0;
+            }
+
+            int availableSouls = SoulCageItem.getTotal(res);
+            if (availableSouls < soulCost) {
+                // Not enough souls for next level -> no preview
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
@@ -688,7 +742,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             if (index >= 3) {
                 if (isCombatItem(stack)) {
                     if (!this.moveItemStackTo(stack, 0, 1, false)) return ItemStack.EMPTY;
-                } else if (stack.is(Items.IRON_INGOT)) {
+                } else if (SoulCageItem.isCage(stack)) {
                     if (!this.moveItemStackTo(stack, 1, 2, false)) return ItemStack.EMPTY;
                 } else {
                     return ItemStack.EMPTY;

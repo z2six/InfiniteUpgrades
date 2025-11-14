@@ -25,6 +25,7 @@ import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
 import org.z2six.infiniteupgrades.feature.infusion.logic.UpgradeService;
 import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
+import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
 import java.text.DecimalFormat;
 import java.util.*;
@@ -285,16 +286,19 @@ public final class DetailsPanelView {
             addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.WHITE, width);
         }
 
-        // Chance line with reputation breakdown (fix double and missing sign)
+        // Chance line with reputation breakdown
         ChanceParts chance = computeChanceWithRep(subj, ritual);
         String repBonusStr = (chance.repBonus >= 0 ? "+" : "")
-                + PCT1.format(chance.repBonus * 100.0) + "%"; // <-- removed Math.abs()
+                + PCT1.format(chance.repBonus * 100.0) + "%";
         String repUnifiedStr = (chance.repUnified >= 0 ? "+" : "")
                 + PCT0.format(chance.repUnified);
 
         addWrapped(BULLET + "Chance: " + PCT1.format(chance.total * 100.0) + "%  ("
                 + PCT1.format(chance.base * 100.0) + "% " + repBonusStr
                 + " from " + repUnifiedStr + " rep)", ChatFormatting.WHITE, width);
+
+        // NEW: soul cost line (based on server config model)
+        buildSoulCostLine(subj, width);
 
         // Divider
         addBlank();
@@ -475,6 +479,70 @@ public final class DetailsPanelView {
 
         double total = Mth.clamp(base + repBonus, 0.0, 1.0);
         return new ChanceParts(base, repBonus, total, unified);
+    }
+
+    /**
+     * Show how many souls the next upgrade will cost, and how many are available
+     * in the Soul Cage in slot 1 (if any).
+     *
+     * Uses the same server-side model as the real deduction:
+     * UpgradeService.getSoulCostForNextLevel(level).
+     */
+    private void buildSoulCostLine(ItemStack subj, int width) {
+        // If we have no subject item, nothing to show
+        if (subj == null || subj.isEmpty()) {
+            addWrapped(BULLET + "Soul cost: —", ChatFormatting.WHITE, width);
+            return;
+        }
+
+        int currentLevel;
+        try {
+            currentLevel = parsePlusLevel(subj);
+        } catch (Throwable ignored) {
+            currentLevel = 0;
+        }
+
+        int cost;
+        try {
+            cost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel));
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] buildSoulCostLine: getSoulCostForNextLevel failed: {}", t.toString());
+            cost = 0;
+        }
+
+        // Look at slot 1 (resource) for a Soul Cage and its current soul total
+        ItemStack cage = ItemStack.EMPTY;
+        int available = 0;
+        try {
+            AngelDemonMenu menu = screen.getMenu();
+            if (menu != null) {
+                ItemStack s1 = menu.getSlot(1).getItem();
+                if (SoulCageItem.isCage(s1)) {
+                    cage = s1;
+                    available = SoulCageItem.getTotal(s1);
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] buildSoulCostLine: failed reading cage slot: {}", t.toString());
+        }
+
+        // Build line + color based on availability
+        String line;
+        ChatFormatting color;
+
+        if (cost <= 0) {
+            line = BULLET + "Soul cost: 0 (no souls required)";
+            color = ChatFormatting.WHITE;
+        } else if (cage.isEmpty()) {
+            line = BULLET + "Soul cost: " + cost + " souls (no Soul Cage)";
+            color = ChatFormatting.RED;
+        } else {
+            boolean enough = available >= cost;
+            line = BULLET + "Soul cost: " + cost + " / " + available + " souls";
+            color = enough ? ChatFormatting.AQUA : ChatFormatting.RED;
+        }
+
+        addWrapped(line, color, width);
     }
 
     // -------------- Small helpers ----------------

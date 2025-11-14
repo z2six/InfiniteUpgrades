@@ -80,6 +80,58 @@ public class SoulCageItem extends Item implements GeoItem {
         return next;
     }
 
+    /**
+     * Returns true if this stack is a Soul Cage and it contains at least the requested
+     * number of soul units. Never throws; on any error returns false.
+     */
+    public static boolean hasAtLeast(@NotNull ItemStack stack, int units) {
+        if (units <= 0) return true; // trivial case
+        if (!isCage(stack)) return false;
+
+        try {
+            int total = getTotal(stack);
+            return total >= units;
+        } catch (Throwable t) {
+            LOG.error("[SoulCageItem] hasAtLeast failed: {}", t.toString());
+            return false;
+        }
+    }
+
+    /**
+     * Server-side helper to consume soul units from this cage.
+     * Returns true if the requested amount was fully consumed, false if there were not
+     * enough souls or an error occurred. On false, the stack is left unchanged.
+     */
+    public static boolean consumeUnits(@NotNull ItemStack stack, int units) {
+        if (units <= 0) return true; // nothing to consume
+
+        if (!isCage(stack)) {
+            LOG.warn("[SoulCageItem] consumeUnits called with non-cage stack: {}", stack);
+            return false;
+        }
+
+        try {
+            CustomData data = stack.get(DataComponents.CUSTOM_DATA);
+            CompoundTag tag = (data != null) ? data.copyTag() : new CompoundTag();
+
+            int current = Math.max(0, tag.getInt(NBT_TOTAL));
+            if (current < units) {
+                LOG.debug("[SoulCageItem] Not enough souls to consume: have={}, need={}", current, units);
+                return false;
+            }
+
+            int remaining = current - units;
+            tag.putInt(NBT_TOTAL, remaining);
+            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+
+            LOG.debug("[SoulCageItem] Consumed {} souls from cage; now remaining={}", units, remaining);
+            return true;
+        } catch (Throwable t) {
+            LOG.error("[SoulCageItem] consumeUnits failed: {}", t.toString());
+            return false;
+        }
+    }
+
     public static @NotNull ItemStack findAnyCage(@NotNull Player player) {
         ItemStack off = player.getOffhandItem();
         if (isCage(off)) return off;

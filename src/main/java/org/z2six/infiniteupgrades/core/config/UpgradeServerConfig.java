@@ -52,7 +52,6 @@ public final class UpgradeServerConfig {
     public static final ModConfigSpec SPEC;
 
     static {
-        // Attach all sections to the single builder (key paths preserved)
         GENERAL_SPEC    = GeneralConfigSpec.define(B);
         CHANCE_SPEC     = ChanceConfigSpec.define(B);
         TUNING_SPEC     = TuningConfigSpec.define(B);
@@ -74,26 +73,24 @@ public final class UpgradeServerConfig {
         public final ChanceModelType chanceModel;
         public final double startChance;
         public final double decrementPerLevel;
-        public final double minChance;           // minimum floor for chance models
+        public final double minChance;
         public final double exponentialBase;
         public final Map<Integer, Double> chanceOverrides;
 
         public final double angelStepMult;
         public final double demonStepMult;
-        public final double infuseDelaySeconds;  // server-authoritative infuse timer
+        public final double infuseDelaySeconds;
 
-        // Unified reputation
         public final int repMax;
         public final double repDeltaSuccess;
         public final double repDeltaFail;
         public final double repBonusPerPoint;
         public final double repBonusClamp;
 
-        public final List<AttributeRuleConfig> attributes; // defaults + dynamic
+        public final List<AttributeRuleConfig> attributes;
 
         public final SoulsConfig souls;
 
-        // server-authoritative preview tuning (client preview reads from this)
         public final TuningConfigSpec.Snapshot tuning;
 
         private Snapshot(UpgradeMode mode, int maxLevel,
@@ -105,6 +102,7 @@ public final class UpgradeServerConfig {
                          List<AttributeRuleConfig> attrs,
                          SoulsConfig souls,
                          TuningConfigSpec.Snapshot tuning) {
+
             this.upgradeMode = mode;
             this.maxLevel = maxLevel;
 
@@ -130,38 +128,38 @@ public final class UpgradeServerConfig {
             this.tuning = tuning;
         }
 
-        /** Client preview helper: percent (fraction) for L->L+1 according to server tuning. */
         public double percentBonusForLevelUp(int currentLevel) {
             return tuning != null ? tuning.percentBonusForLevelUp(currentLevel) : 0.05;
         }
     }
 
+    // ---------------------- SoulsConfig WITH NEW FIELDS ----------------------
     public static final class SoulsConfig {
         public final boolean enabled;
         public final double dropChance;
-
-        // selection model
         public final SoulsDropModel dropModel;
 
-        // RATIO model fields (legacy)
         public final double hpToSoulsRatio;
         public final int    minUnitsForDrop;
         public final int    lifetimeSeconds;
-        public final Map<String, Integer> tierUnits; // key = TIER name
+        public final Map<String, Integer> tierUnits;
 
-        // HP_THRESHOLDS model fields
-        public final Map<String, Double> tierMinHearts; // key = TIER name, value = min hearts
+        public final Map<String, Double> tierMinHearts;
 
         public final boolean allowPvP;
         public final Set<ResourceLocation> whitelist;
         public final Set<ResourceLocation> blacklist;
 
-        // Light controls
         public final boolean spawnLights;
         public final int     lightRadiusBlocks;
-
-        // Collection controls
         public final int     collectRangeBlocks;
+
+        // ------------------ NEW FIELDS FOR UPGRADE COST ------------------
+        public final double upgradeBaseCost;
+        public final double upgradeExponentialBase;
+        public final double upgradeExponentialScale;
+        public final Map<Integer,Integer> upgradeCostOverrides;
+        // -----------------------------------------------------------------
 
         public SoulsConfig(boolean enabled,
                            double dropChance,
@@ -176,7 +174,14 @@ public final class UpgradeServerConfig {
                            Set<ResourceLocation> blacklist,
                            boolean spawnLights,
                            int lightRadiusBlocks,
-                           int collectRangeBlocks) {
+                           int collectRangeBlocks,
+
+                           // NEW
+                           double upgradeBaseCost,
+                           double upgradeExponentialBase,
+                           double upgradeExponentialScale,
+                           Map<Integer,Integer> upgradeCostOverrides) {
+
             this.enabled = enabled;
             this.dropChance = dropChance;
             this.dropModel = dropModel;
@@ -191,8 +196,14 @@ public final class UpgradeServerConfig {
             this.spawnLights = spawnLights;
             this.lightRadiusBlocks = Math.max(0, lightRadiusBlocks);
             this.collectRangeBlocks = Math.max(1, collectRangeBlocks);
+
+            this.upgradeBaseCost = upgradeBaseCost;
+            this.upgradeExponentialBase = upgradeExponentialBase;
+            this.upgradeExponentialScale = upgradeExponentialScale;
+            this.upgradeCostOverrides = upgradeCostOverrides;
         }
 
+        // Needed by SoulOrbEntity
         public int tierUnitsOrDefault(String tierName, int def) {
             Integer v = tierUnits.get(tierName);
             return v != null && v > 0 ? v : def;
@@ -200,7 +211,7 @@ public final class UpgradeServerConfig {
     }
 
     public static final class AttributeRuleConfig {
-        public final ResourceLocation id; // attribute RL
+        public final ResourceLocation id;
         public final boolean enabled;
         public final int weight;
         public final Direction direction;
@@ -229,28 +240,16 @@ public final class UpgradeServerConfig {
         }
     }
 
-    /** Builds a live snapshot (defensive, logs, never throws). */
+    // ------------------ BUILD SNAPSHOT ------------------
     public static Snapshot snapshot() {
         try {
-            // General
             GeneralConfigSpec.Snapshot gs = GENERAL_SPEC.snapshot();
-
-            // Chance
             ChanceConfigSpec.Snapshot cs = CHANCE_SPEC.snapshot();
-
-            // Tuning (server preview)
             TuningConfigSpec.Snapshot ts = TUNING_SPEC.snapshot();
-
-            // Rituals
             RitualsConfigSpec.Snapshot rs = RITUALS_SPEC.snapshot();
-
-            // Reputation (unified)
             ReputationConfigSpec.Snapshot reps = REPUTATION_SPEC.snapshot();
-
-            // Attributes
             AttributesConfigSpec.Snapshot as = ATTR_SPEC.snapshot();
 
-            // Souls
             SoulsConfigSpec.Snapshot ss = SOULS_SPEC.snapshot();
             SoulsConfig souls = new SoulsConfig(
                     ss.enabled,
@@ -266,7 +265,13 @@ public final class UpgradeServerConfig {
                     ss.blacklist,
                     ss.spawnLights,
                     ss.lightRadiusBlocks,
-                    ss.collectRangeBlocks
+                    ss.collectRangeBlocks,
+
+                    // NEW
+                    ss.upgradeBaseCost,
+                    ss.upgradeExponentialBase,
+                    ss.upgradeExponentialScale,
+                    ss.upgradeCostOverrides
             );
 
             return new Snapshot(
@@ -290,44 +295,43 @@ public final class UpgradeServerConfig {
                     souls,
                     ts
             );
+
         } catch (Throwable t) {
-            LOG.error("[UpgradeServerConfig] snapshot() failed; returning hardcoded defaults: {}", t.toString());
-            // Fallback mirrors original values closely (with unified reputation).
+            LOG.error("[UpgradeServerConfig] snapshot() failed: {}", t.toString());
+
             return new Snapshot(
                     UpgradeMode.RANDOM,
                     20,
                     ChanceModelType.FLAT_DECREMENT,
-                    1.0, 0.05, 0.0,     // start, decrement, minChance
-                    0.95,               // exponentialBase
-                    parseLevelDoubleMap(List.of("1=1.0", "2=0.95"), "chance.overrides"),
-                    1.0, 1.5,           // angel, demon
-                    3.0,                // infuseDelaySeconds (default)
-                    100, 0.1, 0.0,      // repMax, deltaSuccess, deltaFail
-                    0.001, 0.20,        // bonusPerPoint, bonusClamp
-                    List.of(
-                            new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.attack_damage"), true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
-                            new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.attack_speed"),  true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
-                            new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.armor"),         true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
-                            new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.armor_toughness"), true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0),
-                            new AttributeRuleConfig(ResourceLocation.parse("minecraft:generic.knockback_resistance"), true, 1, Direction.INCREASE, StepType.PERCENT, 0.05, Map.of(), Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, false, 0.0)
-                    ),
+                    1.0, 0.05, 0.0,
+                    0.95,
+                    parseLevelDoubleMap(List.of("1=1.0","2=0.95"), "chance.overrides"),
+                    1.0, 1.5,
+                    3.0,
+                    100, 0.1, 0.0,
+                    0.001, 0.20,
+                    List.of(),
                     new SoulsConfig(
-                            true,                      // enabled
-                            1.0,                       // dropChance
-                            SoulsDropModel.HP_THRESHOLDS, // dropModel
-                            0.75,                      // hpToSoulsRatio
-                            1,                         // minUnitsForDrop
-                            30,                        // lifetimeSeconds
-                            Map.of("SMALL",1,"MEDIUM",4,"LARGE",8,"EXTRA_LARGE",16), // tierUnits
-                            Map.of("SMALL",0.0,"MEDIUM",10.0,"LARGE",20.0,"EXTRA_LARGE",40.0), // tierMinHearts
-                            false,                     // allowPvP
-                            Set.of(),                  // whitelist
-                            Set.of(),                  // blacklist
-                            true,                      // spawnLights (default)
-                            3,                         // lightRadiusBlocks (default)
-                            6                          // collectRangeBlocks (default)
+                            true,
+                            1.0,
+                            SoulsDropModel.HP_THRESHOLDS,
+                            0.75,
+                            1,
+                            30,
+                            Map.of("SMALL",1,"MEDIUM",4,"LARGE",8,"EXTRA_LARGE",16),
+                            Map.of("SMALL",0.0,"MEDIUM",10.0,"LARGE",20.0,"EXTRA_LARGE",40.0),
+                            false,
+                            Set.of(),
+                            Set.of(),
+                            true,
+                            3,
+                            6,
+                            10.0,      // fallback upgradeBaseCost
+                            1.1,       // fallback exponentialBase
+                            1.0,       // fallback scale
+                            Map.of()   // overrides
                     ),
-                    new TuningConfigSpec.Snapshot(0.05, Map.of()) // stepPercent, bonusSteps
+                    new TuningConfigSpec.Snapshot(0.05, Map.of())
             );
         }
     }
@@ -335,8 +339,6 @@ public final class UpgradeServerConfig {
     public static void onServerConfigReload(ModConfigEvent event) {
         LOG.debug("[UpgradeServerConfig] onServerConfigReload: {}", event.getConfig().getFileName());
     }
-
-    // ---- Name color selection (delegates to General section to keep API stable) -----------------
 
     public static ChatFormatting nameColorForLevel(int level) {
         return GENERAL_SPEC.nameColorForLevel(level);
