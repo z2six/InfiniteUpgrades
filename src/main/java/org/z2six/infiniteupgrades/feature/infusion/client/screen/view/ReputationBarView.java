@@ -1,5 +1,4 @@
-// REPLACE the whole file contents with this updated version
-
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/ReputationBarView.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;
@@ -19,49 +18,41 @@ import java.util.List;
 /**
  * Renders the reputation bar (108x13) with a state-based background and an 8x11 pointer.
  *
- * Backgrounds:
- *  - background_half.png      : default (and temporary placeholder for “halfway” states)
- *  - background_celestial.png : shown when at +max (angel cap)
- *  - background_demonic.png   : shown when at -max (demon cap)
- *
- * Future: halfway-to-demon / halfway-to-angel art. Code already branches; currently both fall back to background_half.png.
- *
- * Pointer logic unchanged; it spans the full bar width and is centered at 0 rep.
+ * Background mapping (normalized rep n = unified/repMax):
+ *  - [-1.00, -0.75]      -> background_demonic.png
+ *  - (-0.75, -0.25]      -> background_75p_demonic.png
+ *  - (-0.25, +0.25)      -> background_half.png
+ *  - [ +0.25, +0.75 )    -> background_75p_celestial.png
+ *  - [ +0.75, +1.00]     -> background_celestial.png
  */
 public final class ReputationBarView {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // New bar size (exact pixels)
+    // Bar & pointer sizes (pixels)
     public static final int BAR_W = 108;
     public static final int BAR_H = 13;
-
-    // Pointer size stays the same
     public static final int PTR_W = 8;
     public static final int PTR_H = 11;
 
-    // Formatting
     private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
 
-    // Resources (all resolved up-front)
-    private final ResourceLocation bgHalf;        // default
-    private final ResourceLocation bgCelestial;   // angel max
-    private final ResourceLocation bgDemonic;     // demon max
-
-    // When you add “halfway to side” textures later, just change these to your new paths.
-    // For now, they intentionally point to bgHalf so visuals don’t change until art arrives.
-    private final ResourceLocation bgHalfToAngel; // TODO swap to e.g. background_half_angel.png later
-    private final ResourceLocation bgHalfToDemon; // TODO swap to e.g. background_half_demon.png later
+    // Backgrounds
+    private final ResourceLocation bgHalf;
+    private final ResourceLocation bgCelestial;
+    private final ResourceLocation bgDemonic;
+    private final ResourceLocation bg75Celestial;
+    private final ResourceLocation bg75Demonic;
 
     private final ResourceLocation ptrTex;
 
     // Parent + anchor
     private final AngelDemonScreen screen;
-    private final int baseX; // absolute screen X where the bar's top-left starts
-    private final int baseY; // absolute screen Y where the bar's top-left starts
+    private final int baseX;
+    private final int baseY;
 
-    // Unified reputation value from server (domain [-repMax..+repMax]) + repMax
+    // Rep snapshot (server-provided)
     private double unified = 0.0;
-    private int repMaxForView = 100; // default; updated from server snapshot
+    private int repMaxForView = 100;
 
     // One-time init logging / resource verification
     private boolean loggedInit = false;
@@ -69,36 +60,44 @@ public final class ReputationBarView {
     private boolean halfExists = true;
     private boolean angelExists = true;
     private boolean demonExists = true;
+    private boolean c75Exists = true;
+    private boolean d75Exists = true;
 
-    public ReputationBarView(AngelDemonScreen screen, int x, int y,
-                             ResourceLocation backgroundHalf,
-                             ResourceLocation backgroundCelestial,
-                             ResourceLocation backgroundDemonic,
-                             ResourceLocation pointerTex) {
+    public ReputationBarView(
+            AngelDemonScreen screen, int x, int y,
+            ResourceLocation backgroundHalf,
+            ResourceLocation background75Celestial,
+            ResourceLocation background75Demonic,
+            ResourceLocation backgroundCelestial,
+            ResourceLocation backgroundDemonic,
+            ResourceLocation pointerTex
+    ) {
         this.screen = screen;
         this.baseX = x;
         this.baseY = y;
 
-        this.bgHalf = backgroundHalf;
-        this.bgCelestial = backgroundCelestial;
-        this.bgDemonic = backgroundDemonic;
-
-        // Pre-wire future “halfway” art — currently routed to the neutral half background.
-        this.bgHalfToAngel = backgroundHalf;
-        this.bgHalfToDemon = backgroundHalf;
+        this.bgHalf        = backgroundHalf;
+        this.bg75Celestial = background75Celestial;
+        this.bg75Demonic   = background75Demonic;
+        this.bgCelestial   = backgroundCelestial;
+        this.bgDemonic     = backgroundDemonic;
 
         this.ptrTex = pointerTex;
 
-        // Proactively check that resources exist; log if missing.
+        // Proactively check that resources exist; log if missing (defensive, non-fatal).
         try {
             Minecraft mc = screen.getMinecraft();
             if (mc != null && mc.getResourceManager() != null) {
-                halfExists  = resourceExists(mc, bgHalf);
+                halfExists = resourceExists(mc, bgHalf);
+                c75Exists  = resourceExists(mc, bg75Celestial);
+                d75Exists  = resourceExists(mc, bg75Demonic);
                 angelExists = resourceExists(mc, bgCelestial);
                 demonExists = resourceExists(mc, bgDemonic);
                 ptrExists   = resourceExists(mc, pointerTex);
 
                 if (!halfExists)  LOG.error("[RepBar] Missing texture: {}", bgHalf);
+                if (!c75Exists)   LOG.error("[RepBar] Missing texture: {}", bg75Celestial);
+                if (!d75Exists)   LOG.error("[RepBar] Missing texture: {}", bg75Demonic);
                 if (!angelExists) LOG.error("[RepBar] Missing texture: {}", bgCelestial);
                 if (!demonExists) LOG.error("[RepBar] Missing texture: {}", bgDemonic);
                 if (!ptrExists)   LOG.error("[RepBar] Missing texture: {}", pointerTex);
@@ -125,47 +124,29 @@ public final class ReputationBarView {
     }
 
     public void tick() {
-        // No-op (reserved for future pointer easing/animation)
+        // reserved for future easing
     }
 
-    /**
-     * Render:
-     * - Choose background by state (max demon / max angel / halfway-to-side / default half).
-     * - Draw background at (baseX, baseY).
-     * - Draw pointer centered along the BAR width based on unified rep.
-     */
+    /** Draw background + pointer. */
     public void render(GuiGraphics gg) {
         if (!loggedInit) {
             loggedInit = true;
             LOG.debug("[RepBar] init: unified={} repMax={} (client snapshot)", unified, repMaxForView);
         }
 
-        // Pick proper background
+        // Background
         ResourceLocation bg = chooseBackground();
-
-        // Draw BAR background (no scaling)
         gg.blit(bg, baseX, baseY, 0, 0, BAR_W, BAR_H, BAR_W, BAR_H);
 
-        // Normalize to [-1..+1]
+        // Pointer mapping
         double normalized = clamp(unified / (double)repMaxForView, -1.0, 1.0);
 
-        // Pointer travel range shrinks by side margins
-                final int SIDE_MARGIN = 11; // px inward from each side where pointer stops
-
-        // Effective width that the pointer can move within
-                double usableWidth = BAR_W - (SIDE_MARGIN * 2);
-
-        // Map normalized [-1..+1] → [0..usableWidth]
-                double offset = (usableWidth * (normalized + 1.0) / 2.0);
-
-        // Compute center position inside the image, offset by left margin
-                double centerX = baseX + SIDE_MARGIN + offset;
-
-        // Convert to left draw X (center-anchor the 8-px pointer)
-                int ptrLeftX = (int)Math.round(centerX - PTR_W / 2.0);
-
-        // Align pointer to the bar’s top; (it’s 11px tall vs bar 13px — looks good slightly inset)
-        int ptrTopY = baseY;
+        final int SIDE_MARGIN = 11; // inward clamp so pointer doesn’t clip edges
+        double usableWidth = BAR_W - (SIDE_MARGIN * 2);
+        double offset = (usableWidth * (normalized + 1.0) / 2.0);
+        double centerX = baseX + SIDE_MARGIN + offset;
+        int ptrLeftX = (int)Math.round(centerX - PTR_W / 2.0);
+        int ptrTopY = baseY; // looks good slightly inset against 13px bar
 
         if (ptrExists) {
             gg.blit(ptrTex, ptrLeftX, ptrTopY, 0, 0, PTR_W, PTR_H, PTR_W, PTR_H);
@@ -214,24 +195,32 @@ public final class ReputationBarView {
         gg.renderTooltip(font, ordered, mouseX, mouseY);
     }
 
-    // -------- state/background selection --------
+    // ---------- background selection ----------
 
     private ResourceLocation chooseBackground() {
-        double n = (repMaxForView == 0) ? 0.0 : unified / (double)repMaxForView;
+        // Guard against div-by-zero (repMaxForView clamped >=1 elsewhere)
+        double n = (repMaxForView == 0) ? 0.0 : (unified / (double)repMaxForView);
 
-        // Max caps (exact ends)
-        if (n >= 1.0 - 1e-12 && angelExists) return bgCelestial;
-        if (n <= -1.0 + 1e-12 && demonExists) return bgDemonic;
-
-        // Future half-way states (currently point at bgHalf until you add textures)
-        if (n >= 0.5) return bgHalfToAngel; // TODO: swap to your dedicated halfway-to-angel art
-        if (n <= -0.5) return bgHalfToDemon; // TODO: swap to your dedicated halfway-to-demon art
-
-        // Default
-        return bgHalf;
+        // Use exact inclusivity to match your spec:
+        // demonic full:     [-1.00, -0.75]
+        // demonic 75%:      (-0.75, -0.25]
+        // half:             (-0.25, +0.25)
+        // celestial 75%:    [ +0.25, +0.75 )
+        // celestial full:   [ +0.75, +1.00]
+        if (n >= 0.75) {
+            return (angelExists ? bgCelestial : bgHalf);
+        } else if (n >= 0.25) {
+            return (c75Exists ? bg75Celestial : bgHalf);
+        } else if (n > -0.25 && n < 0.25) {
+            return bgHalf;
+        } else if (n > -0.75) { // n <= -0.25 handled here
+            return (d75Exists ? bg75Demonic : bgHalf);
+        } else {
+            return (demonExists ? bgDemonic : bgHalf);
+        }
     }
 
-    // ---------------- helpers ----------------
+    // ---------- helpers ----------
 
     private boolean isHovering(int mouseX, int mouseY) {
         return mouseX >= baseX && mouseX < (baseX + BAR_W)

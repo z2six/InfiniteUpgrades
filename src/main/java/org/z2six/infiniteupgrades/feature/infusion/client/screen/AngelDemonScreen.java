@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/AngelDemonScreen.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/AngelDemonScreen.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen;
 
 import com.mojang.logging.LogUtils;
@@ -53,7 +53,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     // Tooltip helpers
     private static final Pattern LEADING_NUM = Pattern.compile("^\\s*([+\\-]?\\d+(?:\\.\\d+)?)\\s+(.*)$");
     private static final Pattern BRACKETS = Pattern.compile("\\[[^\\]]*\\]");
-    // also obfuscate parentheses segments like "(+20%)" for the preview tooltip
     private static final Pattern PARENS   = Pattern.compile("\\([^)]*\\)");
 
     private MainGuiView mainView;
@@ -72,10 +71,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
     public AngelDemonScreen(AngelDemonMenu menu, Inventory inv, Component title) {
         super(menu, inv, Component.empty());
-        // Center the **group**
         this.imageWidth  = GROUP_W;
         this.imageHeight = GROUP_H;
-        // We don't render vanilla labels
         this.titleLabelX = 0;
         this.titleLabelY = 0;
         this.inventoryLabelX = 0;
@@ -121,6 +118,18 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
                 "textures/gui/container/reputation/background_demonic.png"
         );
     }
+    private ResourceLocation repBg75CelestialTex() {
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/reputation/background_75p_celestial.png"
+        );
+    }
+    private ResourceLocation repBg75DemonicTex() {
+        return ResourceLocation.fromNamespaceAndPath(
+                "infiniteupgrades",
+                "textures/gui/container/reputation/background_75p_demonic.png"
+        );
+    }
 
     // Expose latest rep snapshot for DetailsPanelView (for chance preview)
     public double getRepUnified() { return repUnified; }
@@ -138,13 +147,17 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         detailsView = new DetailsPanelView(this);
         progressView = new ProgressFillView(this);
 
-        // Rep bar anchor...
+        // Rep bar anchor
         int repX = this.leftPos + (MainGuiView.MAIN_W - REP_W) / 2;
         int repY = (this.topPos + DRAW_FUDGE_Y) - REP_H - 1;
+
+        // NOTE: pass five backgrounds (half, 75c, 75d, full c, full d) + pointer
         repView = new ReputationBarView(
                 this,
                 repX, repY,
                 repBgHalfTex(),
+                repBg75CelestialTex(),
+                repBg75DemonicTex(),
                 repBgCelestialTex(),
                 repBgDemonicTex(),
                 repPointerTex()
@@ -158,15 +171,9 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
         // Resume any pending infusion lock/animation after reopen
         ModNet.requestPendingState();
-
-        // NEW: If the client backlogged the infusion animation while screen was closed, play it now.
-        // This triggers both SFX and overlay animation in sync as soon as the GUI opens.
         InfuseClientEffects.onScreenOpenedPlayBacklog();
 
-        // Ensure details starts fresh
         if (detailsView != null) detailsView.markDirty();
-
-        // Prime slot snapshots
         snapshotSlots();
     }
 
@@ -185,7 +192,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         super.containerTick();
         if (mainView != null) mainView.tick();
 
-        // Poll the three top slots; mark details dirty if any changed.
         boolean changed = false;
         ItemStack s0 = safeStack(0);
         ItemStack s1 = safeStack(1);
@@ -216,17 +222,16 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
     @Override
     public void render(GuiGraphics gg, int mouseX, int mouseY, float partialTick) {
-        // Background first
         this.renderBackground(gg, mouseX, mouseY, partialTick);
 
-        // Tooltip routing
+        // Tooltip routing for preview item
         Slot hoveredBefore = this.hoveredSlot;
         boolean interceptPreview = false;
 
         if (hoveredBefore != null && hoveredBefore.hasItem()) {
             ItemStack s = hoveredBefore.getItem();
             if (hoveredBefore.index == 2 && isPreview(s)) {
-                interceptPreview = true; // we'll draw a special "mystery" tooltip
+                interceptPreview = true;
             }
         }
 
@@ -236,17 +241,14 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
         super.render(gg, mouseX, mouseY, partialTick);
 
-        // Draw reputation overlay after the base UI so it's on top
         if (repView != null) {
             repView.render(gg);
-            // NEW: draw tooltip when hovering the rep bar
             repView.renderOverlay(gg, mouseX, mouseY);
         }
 
         if (detailsView != null) detailsView.renderOverlay(gg, mouseX, mouseY);
 
         if (interceptPreview && hoveredBefore != null && hoveredBefore.hasItem()) {
-            // Custom tooltip for PREVIEW items: obfuscate numeric parts to avoid spoilers.
             ItemStack stack = hoveredBefore.getItem();
             List<Component> vanilla = Screen.getTooltipFromItem(this.minecraft, stack);
             List<Component> modified = obfuscateNumericPartsInCombatLines(stack, vanilla);
@@ -255,7 +257,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
                     .toList();
             gg.renderTooltip(this.font, ordered, mouseX, mouseY);
         } else {
-            // For REAL items, let the normal tooltip flow run (TooltipHooks will augment globally).
             this.renderTooltip(gg, mouseX, mouseY);
         }
     }
@@ -263,7 +264,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     @Override
     protected void renderBg(GuiGraphics gg, float partialTick, int mouseX, int mouseY) {
         if (mainView != null) mainView.renderBg(gg);
-        if (progressView != null) progressView.renderBg(gg); // draw animation overlay
+        if (progressView != null) progressView.renderBg(gg);
         if (detailsView != null) detailsView.renderBg(gg);
     }
 
@@ -350,9 +351,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         return out;
     }
 
-    /** Obfuscate all [...] and (...) segments in order, preserving the rest. */
     private static MutableComponent obfuscateBracketAndParenSegments(String text) {
-        // Collect all ranges for [] and ()
         class Range { final int s, e; Range(int s, int e){ this.s=s; this.e=e; } }
         List<Range> ranges = new ArrayList<>();
 
@@ -362,7 +361,6 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         Matcher pm = PARENS.matcher(text);
         while (pm.find()) ranges.add(new Range(pm.start(), pm.end()));
 
-        // Sort by start index
         ranges.sort((a,b) -> Integer.compare(a.s, b.s));
 
         MutableComponent result = Component.literal("");
