@@ -87,8 +87,9 @@ public class Infiniteupgrades {
         ITEMS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
-        // 🔑 Register the statues’ separate register EARLY
+        // Statues (separate registry holder)
         ModBlocks.BLOCKS.register(modEventBus);
+        ModBlocks.ITEMS.register(modEventBus); // <-- IMPORTANT: register the BlockItems too
 
         // Other module registries
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
@@ -126,16 +127,17 @@ public class Infiniteupgrades {
         LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
-    private void addCreative(BuildCreativeModeTabContentsEvent event) {
+    private void addCreative(net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
         try {
             if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
-                event.accept(ModBlocks.ANGEL_STATUE_ITEM);
-                event.accept(ModBlocks.DEMON_STATUE_ITEM);
-                event.accept(CELESTIAL_SIGIL_ITEM);
-                event.accept(UNHOLY_SIGIL_ITEM);
+                // pass ItemLike, not the holder
+                event.accept(ModBlocks.ANGEL_STATUE_ITEM.get());
+                event.accept(ModBlocks.DEMON_STATUE_ITEM.get());
+                event.accept(CELESTIAL_SIGIL_ITEM.get());
+                event.accept(UNHOLY_SIGIL_ITEM.get());
             }
             if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
-                event.accept(SOUL_CAGE);
+                event.accept(SOUL_CAGE.get());
             }
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Creative tab add failed", t);

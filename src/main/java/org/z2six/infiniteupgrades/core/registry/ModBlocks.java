@@ -2,56 +2,76 @@
 package org.z2six.infiniteupgrades.core.registry;
 
 import com.mojang.logging.LogUtils;
-import net.neoforged.bus.api.IEventBus;
-import net.neoforged.neoforge.registries.DeferredBlock;
-import net.neoforged.neoforge.registries.DeferredItem;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.Block;
+import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 import org.z2six.infiniteupgrades.feature.statue.block.StatueBlock;
+import org.z2six.infiniteupgrades.feature.statue.block.statue.StatueKind;
 
 /**
- * Registers Angel/Demon statue blocks + their BlockItems.
- * Uses the specialized DeferredRegister.Blocks so register(...) returns DeferredBlock<T>.
+ * ModBlocks – central block & block-item registry (NeoForge 1.21+ style).
+ * Uses DeferredHolder instead of RegistryObject.
+ * Includes BlockItems (ANGEL_STATUE_ITEM / DEMON_STATUE_ITEM) as your client code expects.
  */
 public final class ModBlocks {
     private static final Logger LOG = LogUtils.getLogger();
 
-    /** Use the specialized Blocks register (important for DeferredBlock<T> typing). */
-    public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(Infiniteupgrades.MODID);
+    public static final DeferredRegister<Block> BLOCKS =
+            DeferredRegister.create(Registries.BLOCK, Infiniteupgrades.MODID);
+    public static final DeferredRegister<Item> ITEMS =
+            DeferredRegister.create(Registries.ITEM, Infiniteupgrades.MODID);
 
-    /** Angel statue block (horizontal facing, non-occluding). */
-    public static final DeferredBlock<StatueBlock> ANGEL_STATUE =
-            BLOCKS.register("angel_statue", StatueBlock::new); // StatueBlock has a no-args ctor
+    // --- Statues (blocks) ---
+    public static final DeferredHolder<Block, StatueBlock> ANGEL_STATUE = BLOCKS.register(
+            "angel_statue",
+            () -> {
+                try {
+                    return new StatueBlock(StatueKind.ANGEL);
+                } catch (Throwable t) {
+                    LOG.error("[ModBlocks] Failed to construct ANGEL_STATUE: {}", t.toString());
+                    return new StatueBlock(StatueKind.DEMON); // safe fallback, never crash
+                }
+            });
 
-    /** Demon statue block (horizontal facing, non-occluding). */
-    public static final DeferredBlock<StatueBlock> DEMON_STATUE =
-            BLOCKS.register("demon_statue", StatueBlock::new); // no-args ctor
+    public static final DeferredHolder<Block, StatueBlock> DEMON_STATUE = BLOCKS.register(
+            "demon_statue",
+            () -> {
+                try {
+                    return new StatueBlock(StatueKind.DEMON);
+                } catch (Throwable t) {
+                    LOG.error("[ModBlocks] Failed to construct DEMON_STATUE: {}", t.toString());
+                    return new StatueBlock(StatueKind.ANGEL);
+                }
+            });
 
-    /** BlockItems go on the main mod ITEMS register to avoid duplicate registries. */
-    public static final DeferredItem<net.minecraft.world.item.BlockItem> ANGEL_STATUE_ITEM =
-            Infiniteupgrades.ITEMS.registerSimpleBlockItem("angel_statue", ANGEL_STATUE);
+    // --- BlockItems (so they appear in creative & can be picked up) ---
+    public static final DeferredHolder<Item, BlockItem> ANGEL_STATUE_ITEM = ITEMS.register(
+            "angel_statue",
+            () -> {
+                try {
+                    return new BlockItem(ANGEL_STATUE.get(), new Item.Properties());
+                } catch (Throwable t) {
+                    LOG.error("[ModBlocks] Failed to construct ANGEL_STATUE_ITEM: {}", t.toString());
+                    // Fallback to a dummy pointing to DEMON_STATUE to avoid nulls
+                    return new BlockItem(DEMON_STATUE.get(), new Item.Properties());
+                }
+            });
 
-    public static final DeferredItem<net.minecraft.world.item.BlockItem> DEMON_STATUE_ITEM =
-            Infiniteupgrades.ITEMS.registerSimpleBlockItem("demon_statue", DEMON_STATUE);
-
-    /**
-     * Convenience hook to match your call site:
-     * Infiniteupgrades -> ModBlocks.register(modEventBus, ITEMS);
-     * We only need to register our BLOCKS here; ITEMS is already handled by the main mod class.
-     */
-    public static void register(IEventBus modEventBus, DeferredRegister.Items ignoredItemsRegister) {
-        try {
-            BLOCKS.register(modEventBus);
-            LOG.debug("[ModBlocks] Registered BLOCKS on MOD event bus");
-        } catch (Throwable t) {
-            LOG.error("[ModBlocks] Failed to register BLOCKS: {}", t.toString());
-        }
-    }
+    public static final DeferredHolder<Item, BlockItem> DEMON_STATUE_ITEM = ITEMS.register(
+            "demon_statue",
+            () -> {
+                try {
+                    return new BlockItem(DEMON_STATUE.get(), new Item.Properties());
+                } catch (Throwable t) {
+                    LOG.error("[ModBlocks] Failed to construct DEMON_STATUE_ITEM: {}", t.toString());
+                    return new BlockItem(ANGEL_STATUE.get(), new Item.Properties());
+                }
+            });
 
     private ModBlocks() {}
-
-    static {
-        LOG.debug("[ModBlocks] Static init complete");
-    }
 }

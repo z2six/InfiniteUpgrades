@@ -31,6 +31,7 @@ import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
+import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.infusion.logic.AttemptRng;
 import org.z2six.infiniteupgrades.feature.infusion.logic.PendingStore;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
@@ -44,11 +45,8 @@ import java.util.regex.Pattern;
 
 /**
  * Angel/Demon menu (server-authoritative).
- * Pending attempt state is persisted via PendingStore (player persistent NBT), so closing the GUI
- * does not cancel or lose the attempt. The result is placed into slot 2 of the ritual slots attachment.
- *
- * NOTE: Angel/Demon sigil blocks were removed. Ritual type is no longer inferred from world blocks.
- * We default to ANGEL. Later, if you want menu-side selection, we can add a toggle or a packet flag.
+ * - Server ctor variants load persisted slots.
+ * - Buf-ctor reads ritual & anchor from the buffer; client sees correct context.
  */
 public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
@@ -92,7 +90,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private boolean suppressPreviewUpdate = false;
     private int previewChancePermille = 0;
 
-    private RitualType ritual = RitualType.ANGEL; // default; no world-based inference anymore
+    private RitualType ritual = RitualType.ANGEL; // default; set explicitly by server ctor/buf
     private BlockPos anchorPos = BlockPos.ZERO;
     private final Player owner;
 
@@ -109,14 +107,75 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     // ---------------- ctors ----------------
 
+    /** Minimal ctor: builds slots; default ritual ANGEL. Server loads persisted slots. */
     public AngelDemonMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
         this.owner = inv.player;
+        this.ritual = RitualType.ANGEL;
+        this.anchorPos = BlockPos.ZERO;
 
+        buildSlots(inv);
+
+        if (this.owner != null && !this.owner.level().isClientSide) {
+            try {
+                loadSlotsFromAttachmentServer();
+                LOG.debug("[AngelDemonMenu] (server base-ctor) loaded persisted slots; ritual={} anchor={}", this.ritual, this.anchorPos);
+            } catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] (server base-ctor) failed to load persisted slots: {}", t.toString());
+            }
+        }
+    }
+
+    /** Server-side ctor with explicit ritual & anchor. */
+    public AngelDemonMenu(int id, Inventory inv, RitualType ritual, BlockPos anchorPos) {
+        super(ModMenus.ANGEL_MENU.get(), id);
+        this.owner = inv.player;
+        this.ritual = (ritual == null ? RitualType.ANGEL : ritual);
+        this.anchorPos = (anchorPos == null ? BlockPos.ZERO : anchorPos);
+
+        buildSlots(inv);
+
+        if (this.owner != null && !this.owner.level().isClientSide) {
+            try {
+                loadSlotsFromAttachmentServer();
+                LOG.debug("[AngelDemonMenu] (server ritual-ctor) loaded persisted slots; ritual={} anchor={}", this.ritual, this.anchorPos);
+            } catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] (server ritual-ctor) failed to load persisted slots: {}", t.toString());
+            }
+        }
+    }
+
+    /** Client-side ctor from network buffer. */
+    public AngelDemonMenu(int id, Inventory inv, FriendlyByteBuf buf) {
+        super(ModMenus.ANGEL_MENU.get(), id);
+        this.owner = inv.player;
+
+        buildSlots(inv);
+
+        try {
+            // Read context written by StatueBlock (pos first, then ritual ordinal)
+            this.anchorPos = buf.readBlockPos();
+            int ord = 0;
+            try { ord = buf.readVarInt(); } catch (Throwable ignored) {}
+            RitualType[] vals = RitualType.values();
+            if (ord < 0 || ord >= vals.length) ord = 0;
+            this.ritual = vals[ord];
+
+            LOG.debug("[AngelDemonMenu] (buf-ctor) Context from buf: pos={} ritual={}", this.anchorPos, this.ritual);
+
+            // Client side: clear any stale client lock snapshot.
+            clientClearServerLock();
+        } catch (Throwable t) {
+            LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
+            this.ritual = RitualType.ANGEL; // safe fallback
+        }
+    }
+
+    // Shared slot layout
+    private void buildSlots(Inventory inv) {
         // Inputs
         this.addSlot(new Slot(baseInv, 0, INPUT1_X, INPUT1_Y) {
             @Override public boolean mayPlace(ItemStack stack) {
-                // While a server-side pending attempt exists, disallow placing to avoid confusion
                 if (owner != null && !owner.level().isClientSide) {
                     if (PendingStore.read((net.minecraft.server.level.ServerPlayer)owner).active()) return false;
                 }
@@ -166,25 +225,15 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         updatePreview();
     }
 
-    public AngelDemonMenu(int id, Inventory inv, FriendlyByteBuf buf) {
-        this(id, inv);
-        try {
-            // Preserve anchor pos for RNG salting / persistence; ritual no longer depends on a block.
-            this.anchorPos = buf.readBlockPos();
-            this.ritual = RitualType.ANGEL; // fixed default; no sigil inference anymore
-            LOG.debug("[AngelDemonMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
+    // --------- Context setters (optional) ---------
 
-            // Load saved items (server only)
-            if (this.owner != null && !this.owner.level().isClientSide) {
-                loadSlotsFromAttachmentServer();
-                syncToClient("load attachment on open (after ritual known)");
-            }
-        } catch (Throwable t) {
-            LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
+    public void serverSetContext(RitualType ritual, BlockPos anchorPos) {
+        if (this.owner != null && !this.owner.level().isClientSide) {
+            this.ritual = (ritual == null ? RitualType.ANGEL : ritual);
+            this.anchorPos = (anchorPos == null ? BlockPos.ZERO : anchorPos);
+            loadSlotsFromAttachmentServer();
+            LOG.debug("[AngelDemonMenu] serverSetContext -> ritual={} anchor={}", this.ritual, this.anchorPos);
         }
-
-        // Client-side ctor: clear any stale client lock snapshot when the screen is built.
-        clientClearServerLock();
     }
 
     public RitualType ritual() { return ritual; }
@@ -213,20 +262,13 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         if (id != BUTTON_INFUSE) {
             return super.clickMenuButton(player, id);
         }
-
-        // Server-authoritative guard: ignore client if an infusion is already running.
         if (!(player instanceof net.minecraft.server.level.ServerPlayer sp)) {
-            return true; // client should never process; return true to swallow
+            return true; // client should never process; swallow
         }
-
         final long now = sp.level().getGameTime();
         final PendingStore.Snapshot snap = PendingStore.read(sp);
-        if (snap.active() && now < snap.end()) {
-            // Already running → do nothing. (Optionally re-send a lock snapshot here.)
-            return true;
-        }
+        if (snap.active() && now < snap.end()) return true;
 
-        // Delegate to the real starter logic (already validates and arms PendingStore).
         onInfuseButtonPressed(sp);
         return true;
     }
@@ -253,10 +295,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         this.clientWillSucceed  = willSucceed;
     }
     public void clientOnPendingState(PendingStateS2C payload) {
-        if (!payload.active()) {
-            clientOnInfuseResult(false);
-            return;
-        }
+        if (!payload.active()) { clientOnInfuseResult(false); return; }
         clientOnInfuseStarted(payload.endGameTime(), payload.durationTicks());
         if (payload.outcomeKnown()) clientOnEarlyOutcome(payload.willSucceed());
     }
@@ -273,7 +312,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         try {
             if (player == null || player.level().isClientSide) return;
 
-            // Decide which slot provides the input:
             ItemStack in0  = baseInv.getItem(0);
             ItemStack out2 = baseInv.getItem(2);
 
@@ -283,7 +321,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack effectiveIn = useOutputAsInput ? out2 : in0;
             ItemStack res         = baseInv.getItem(1);
 
-            // Usual guards: must have a combat item + a Soul Cage as resource.
             if (effectiveIn.isEmpty() || !isCombatItem(effectiveIn)) {
                 LOG.debug("[AngelDemonMenu] Infuse ignored: no valid combat item in input");
                 return;
@@ -293,56 +330,43 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 return;
             }
 
-            // Is there already a server pending?
             PendingStore.Snapshot snap = PendingStore.read((net.minecraft.server.level.ServerPlayer)player);
             if (snap.active()) {
                 LOG.debug("[AngelDemonMenu] Infuse ignored: server pending already active until {}", snap.end());
                 return;
             }
 
-            // Snapshot original and remove access immediately
             ItemStack originalCopy = effectiveIn.copy();
             int cur = readLevelFromTagOrName(effectiveIn);
 
-            // Determine how many souls this attempt costs
             int soulCost = 0;
-            try {
-                soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(cur));
-            } catch (Throwable t) {
-                LOG.error("[AngelDemonMenu] getSoulCostForNextLevel failed: {}", t.toString());
-                soulCost = 0;
-            }
+            try { soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(cur)); }
+            catch (Throwable t) { LOG.error("[AngelDemonMenu] getSoulCostForNextLevel failed: {}", t.toString()); soulCost = 0; }
 
-            // Verify the Soul Cage actually has enough souls
             if (!SoulCageItem.hasAtLeast(res, soulCost)) {
                 int available = SoulCageItem.getTotal(res);
                 LOG.debug("[AngelDemonMenu] Infuse ignored: not enough souls in cage (have={}, need={})", available, soulCost);
                 return;
             }
 
-            // Chance model + rep
             double baseChance  = UpgradeService.getSuccessChance(cur);
             double bonus       = Reputation.computeBonusFor(player, ritual);
             double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
 
-            // Consume soul resource now
             if (soulCost > 0) {
                 boolean consumed = SoulCageItem.consumeUnits(res, soulCost);
                 if (!consumed) {
-                    LOG.warn("[AngelDemonMenu] Infuse aborted: consumeUnits failed after hasAtLeast check (race or NBT error).");
+                    LOG.warn("[AngelDemonMenu] Infuse aborted: consumeUnits failed after hasAtLeast check.");
                     return;
                 }
-                // Ensure container sees updated NBT
                 baseInv.setItem(1, res);
             }
 
-            // Remove the source item from whichever slot we used (server authority)
             withPreviewSuppressed(() -> {
                 if (useOutputAsInput) baseInv.setItem(2, ItemStack.EMPTY);
                 else baseInv.setItem(0, ItemStack.EMPTY);
             });
 
-            // Roll deterministically (server-only)
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 long now = player.level().getGameTime();
                 long attemptId = ++this.menuAttemptCounter;
@@ -352,7 +376,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 Reputation.applyAttemptDelta(sp, ritual, success);
                 ModNet.sendRepSnapshotTo(sp);
 
-                // Precompute upgraded result if success
                 ItemStack upgradedIfSuccess = ItemStack.EMPTY;
                 if (success) {
                     var r = UpgradeService.tryUpgradeWithRitual(originalCopy, player.getRandom(), ritual);
@@ -360,34 +383,27 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     clearPreviewTags(upgradedIfSuccess);
                 }
 
-                // Arm timer (persist in PendingStore so it survives close)
                 UpgradeServerConfig.Snapshot cfg = UpgradeServerConfig.snapshot();
                 int delayTicks = Math.max(0, Mth.ceil(Math.max(0.0, cfg.infuseDelaySeconds) * 20.0));
                 long end = now + delayTicks;
 
                 PendingStore.arm(sp, end, delayTicks, success, ritual, anchorPos, originalCopy, upgradedIfSuccess);
 
-                // Let client lock/animate
                 if (delayTicks > 0) {
                     ModNet.sendInfuseStartedTo(sp, this.containerId, end, delayTicks);
-                    // also send early outcome (cosmetic)
                     ModNet.sendEarlyOutcomeTo(sp, success);
                 } else {
-                    // Immediate finalize (rare config)
                     PendingStore.finalizeIfReady(sp, now);
                     ModNet.sendInfuseResultTo(sp, this.containerId, success);
                 }
 
-                // Persist slots after changes
                 persistSlotsToAttachmentServer();
 
-                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (used {} as input, soulCost={})",
+                LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (anchor={})",
                         cur, ritual,
                         String.format("%.3f", baseChance), String.format("%.3f", bonus),
                         String.format("%.3f", finalChance), String.format("%.5f", roll),
-                        success, delayTicks,
-                        useOutputAsInput ? "slot2" : "slot0",
-                        soulCost);
+                        success, delayTicks, anchorPos);
             }
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] onInfuseButtonPressed failed: {}", t.toString());
@@ -401,7 +417,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         try { super.removed(player); } catch (Throwable t) { LOG.error("[AngelDemonMenu] super.removed threw: {}", t.toString()); }
 
         try {
-            // Do NOT finalize pending here. Only server ticker finalizes.
             ItemStack out = baseInv.getItem(2);
             if (isPreview(out)) {
                 withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
@@ -427,10 +442,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             if (owner != null && !owner.level().isClientSide) {
                 if (hasRealResult()) return;
             }
-
             if (hasRealResult()) return;
 
-            // If server pending exists, suppress ghost
             if (owner instanceof net.minecraft.server.level.ServerPlayer sp) {
                 if (PendingStore.read(sp).active()) {
                     withPreviewSuppressed(() -> {
@@ -444,7 +457,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack in = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);
 
-            // Must have a combat item AND a Soul Cage
             if (in.isEmpty() || !isCombatItem(in) || res.isEmpty() || !SoulCageItem.isCage(res)) {
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
@@ -467,14 +479,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 return;
             }
 
-            // Soul cost + availability
             int soulCost = 0;
-            try {
-                soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel));
-            } catch (Throwable t) {
-                LOG.error("[AngelDemonMenu] updatePreview: getSoulCostForNextLevel failed: {}", t.toString());
-                soulCost = 0;
-            }
+            try { soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel)); }
+            catch (Throwable t) { LOG.error("[AngelDemonMenu] updatePreview: getSoulCostForNextLevel failed: {}", t.toString()); soulCost = 0; }
 
             int availableSouls = SoulCageItem.getTotal(res);
             if (availableSouls < soulCost) {
@@ -706,7 +713,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
             // Output -> player inventory
             if (index == 2) {
-                if (!hasRealResult()) return ItemStack.EMPTY; // don't quick-move ghosts
+                if (!hasRealResult()) return ItemStack.EMPTY;
                 ItemStack stack = slot.getItem();
                 ItemStack copy = stack.copy();
                 if (!this.moveItemStackTo(stack, 3, 39, false)) return ItemStack.EMPTY;
@@ -714,7 +721,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 return copy;
             }
 
-            // If a server-side pending exists, disallow mass-moving to inputs
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 if (PendingStore.read(sp).active()) return ItemStack.EMPTY;
             }
@@ -722,7 +728,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack stack = slot.getItem();
             ItemStack copy = stack.copy();
 
-            // From player inv -> inputs
             if (index >= 3) {
                 if (isCombatItem(stack)) {
                     if (!this.moveItemStackTo(stack, 0, 1, false)) return ItemStack.EMPTY;
@@ -732,7 +737,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     return ItemStack.EMPTY;
                 }
             } else {
-                // From inputs -> player inv
                 if (!this.moveItemStackTo(stack, 3, 39, false)) return ItemStack.EMPTY;
             }
 
@@ -755,7 +759,10 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 : ModAttachments.DEMON_RITUAL_SLOTS.get();
 
         ModAttachments.RitualSlots saved = owner.getData(type);
-        if (saved == null) return;
+        if (saved == null) {
+            LOG.debug("[AngelDemonMenu] No saved slots in attachment for ritual={}", ritual);
+            return;
+        }
 
         withPreviewSuppressed(() -> {
             baseInv.setItem(0, saved.s0().copy());

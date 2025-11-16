@@ -4,8 +4,17 @@ package org.z2six.infiniteupgrades.feature.statue.block;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
@@ -16,31 +25,40 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
+import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
+import org.z2six.infiniteupgrades.feature.statue.block.statue.StatueKind;
 
 /**
  * Decorative statue block (Angel/Demon).
- * Defensive: logs on errors; non-crashing behavior.
- *
- * NOTE: This version uses a FULL 1×1×1 collision/selection box so entities can't clip onto the pedestal.
+ * - 1x1 footprint, EXACTLY 2 blocks tall collision (0..32).
+ * - Right-click opens Angel/Demon menu from SERVER, sending BlockPos + ritual to the client.
+ * - Defensive logs; never crashes the game.
  */
 public class StatueBlock extends Block {
     private static final Logger LOG = LogUtils.getLogger();
+
     public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
 
-    // Full cube for both selection and collision (exactly 1 block high).
-    private static final VoxelShape FULL = box(0, 0, 0, 16, 16, 16);
+    // 1x1 footprint, exactly 2 blocks high
+    private static final VoxelShape PEDESTAL = box(1, 0, 1, 15, 32, 15);
 
-    public StatueBlock() {
+    private final StatueKind kind;
+
+    public StatueBlock(StatueKind kind) {
         super(BlockBehaviour.Properties
                 .of()
                 .strength(2.0F, 6.0F)
                 .sound(SoundType.STONE)
-                .noOcclusion() // model can have transparency; does not affect collision
+                .noOcclusion()
         );
+        this.kind = kind;
         this.registerDefaultState(this.stateDefinition.any().setValue(FACING, Direction.NORTH));
+        LOG.debug("[StatueBlock] Constructed statue block for kind={}", kind);
     }
 
     @Override
@@ -49,13 +67,13 @@ public class StatueBlock extends Block {
     }
 
     @Override
-    public BlockState getStateForPlacement(BlockPlaceContext ctx) {
-        try {
-            return this.defaultBlockState().setValue(FACING, ctx.getHorizontalDirection().getOpposite());
-        } catch (Throwable t) {
-            LOG.error("[StatueBlock] getStateForPlacement failed: {}", t.toString());
-            return this.defaultBlockState();
-        }
+    public BlockState rotate(BlockState state, Rotation rot) {
+        return state.setValue(FACING, rot.rotate(state.getValue(FACING)));
+    }
+
+    @Override
+    public BlockState mirror(BlockState state, Mirror mirror) {
+        return rotate(state, mirror.getRotation(state.getValue(FACING)));
     }
 
     @Override
@@ -70,24 +88,96 @@ public class StatueBlock extends Block {
     }
 
     @Override
-    public BlockState rotate(BlockState state, Rotation rot) {
-        return state.setValue(FACING, rot.rotate(state.getValue(FACING)));
-    }
-
-    @Override
-    public BlockState mirror(BlockState state, Mirror mirror) {
-        return rotate(state, mirror.getRotation(state.getValue(FACING)));
-    }
-
-    // Selection/outline shape (what you see with F3+B and when aiming the block).
-    @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
-        return FULL;
+        return PEDESTAL;
     }
 
-    // Actual collision (what entities collide with).
+    // -------------------- 1.21.x interaction wiring --------------------
+
+    /** Right-click with empty hand (or when the held item doesn't handle the click). */
     @Override
-    public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
-        return FULL;
+    public InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hit) {
+        LOG.debug("[StatueBlock] useWithoutItem kind={} pos={} sideClient={}", kind, pos, level.isClientSide);
+        return handleOpen(level, pos, player);
+    }
+
+    /** Right-click while holding an item (new 1.21 API signature). */
+    @Override
+    public ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
+                                           Player player, InteractionHand hand, BlockHitResult hit) {
+        try {
+            LOG.debug("[StatueBlock] useItemOn kind={} pos={} hand={} sideClient={}", kind, pos, hand, level.isClientSide);
+            InteractionResult res = handleOpen(level, pos, player);
+            return res.consumesAction()
+                    ? ItemInteractionResult.SUCCESS
+                    : ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        } catch (Throwable t) {
+            LOG.error("[StatueBlock] useItemOn failed: {}", t.toString());
+            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        }
+    }
+
+    // -------------------- Common open logic --------------------
+
+    private InteractionResult handleOpen(Level level, BlockPos pos, Player player) {
+        if (level.isClientSide) {
+            return InteractionResult.sidedSuccess(true);
+        }
+        if (!(player instanceof ServerPlayer sp)) {
+            return InteractionResult.PASS;
+        }
+
+        try {
+            // Server creates the menu with explicit ritual + anchor
+            RitualType ritual = (kind == StatueKind.ANGEL) ? RitualType.ANGEL : RitualType.DEMON;
+
+            Component title = (ritual == RitualType.ANGEL)
+                    ? Component.translatable("screen.infiniteupgrades.angel")
+                    : Component.translatable("screen.infiniteupgrades.demon");
+
+            var provider = new net.minecraft.world.SimpleMenuProvider(
+                    (int id, Inventory inv, Player p) -> {
+                        try {
+                            AbstractContainerMenu menu = new AngelDemonMenu(id, inv, ritual, pos);
+                            LOG.debug("[StatueBlock] Created server menu id={} kind={} ritual={} for {}",
+                                    id, kind, ritual, p.getGameProfile().getName());
+                            return menu;
+                        } catch (Throwable t) {
+                            LOG.error("[StatueBlock] Menu ctor failed: {}", t.toString());
+                            return null;
+                        }
+                    },
+                    title
+            );
+
+            // Write SAME order the client reads: pos then ritual ordinal
+            sp.openMenu(provider, buf -> {
+                try {
+                    buf.writeBlockPos(pos);
+                    buf.writeVarInt(ritual.ordinal());
+                } catch (Throwable t) {
+                    LOG.error("[StatueBlock] Failed writing extra buf: {}", t.toString());
+                }
+            });
+
+            LOG.debug("[StatueBlock] Opened menu kind={} ritual={} at {} for {}",
+                    kind, ritual, pos, sp.getGameProfile().getName());
+            return InteractionResult.CONSUME;
+        } catch (Throwable t) {
+            LOG.error("[StatueBlock] handleOpen failed at {}: {}", pos, t.toString());
+            return InteractionResult.PASS;
+        }
+    }
+
+    // -------------------- Legacy placement helper --------------------
+
+    @Override
+    public BlockState getStateForPlacement(net.minecraft.world.item.context.BlockPlaceContext ctx) {
+        try {
+            return this.defaultBlockState().setValue(FACING, ctx.getHorizontalDirection().getOpposite());
+        } catch (Throwable t) {
+            LOG.error("[StatueBlock] getStateForPlacement failed: {}", t.toString());
+            return this.defaultBlockState();
+        }
     }
 }
