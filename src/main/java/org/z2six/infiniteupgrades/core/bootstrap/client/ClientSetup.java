@@ -2,6 +2,8 @@
 package org.z2six.infiniteupgrades.core.bootstrap.client;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.client.renderer.ItemBlockRenderTypes;
+import net.minecraft.client.renderer.RenderType;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -13,17 +15,17 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
+import org.z2six.infiniteupgrades.core.registry.ModBlocks;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.tooltips.TooltipHooks;
 
 /**
- * File: src/main/java/org/z2six/infiniteupgrades/core/bootstrap/client/ClientSetup.java
- *
  * ClientSetup – client-only initialisation for InfiniteUpgrades.
  *
  * - Registers runtime client listeners (GAME bus), including tooltip augmentation.
  * - Registers infusion overlay render + tick listeners (non-deprecated NeoForge APIs).
- * - Renderer registration for Angel/Demon removed (entities deleted).
+ * - Sets render layers for statue blocks so PNG alpha works (cutout by default).
+ * - Renderer registration for Angel/Demon entities remains removed.
  */
 @EventBusSubscriber(modid = Infiniteupgrades.MODID, value = Dist.CLIENT)
 public final class ClientSetup {
@@ -31,25 +33,12 @@ public final class ClientSetup {
 
     private ClientSetup() {}
 
-    /**
-     * Renderer registrations for Angel/Demon were removed.
-     * If you want to keep renderer registration consolidated here in the future,
-     * you can register Soul Orb here and remove it from Infiniteupgrades.Client.
-     */
     @SubscribeEvent
     public static void registerRenderers(EntityRenderersEvent.RegisterRenderers e) {
         // No-op after Angel/Demon removal
         LOG.debug("[ClientSetup] RegisterRenderers no-op (Angel/Demon removed).");
     }
 
-    /**
-     * Register GAME bus listeners at client setup time (non-deprecated).
-     * Hooks:
-     *  - Item tooltips
-     *  - Infusion effects tick (ClientTickEvent.Post)
-     *  - Overlay when NO screen is open (RenderGuiEvent.Post)
-     *  - Overlay when a screen IS open (ScreenEvent.Render.Post)
-     */
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent e) {
         try {
@@ -71,7 +60,24 @@ public final class ClientSetup {
                     InfuseClientEffects.onRenderGuiPost(evt.getGuiGraphics())
             );
 
-            LOG.debug("[ClientSetup] Registered TooltipHooks and InfuseClientEffects listeners on NeoForge.EVENT_BUS");
+            // ---- Render layers for alpha PNGs on statues ----
+            e.enqueueWork(() -> {
+                try {
+                    // Use CUTOUT for hard alpha wings (recommended)
+                    ItemBlockRenderTypes.setRenderLayer(ModBlocks.ANGEL_STATUE.get(), RenderType.cutout());
+                    ItemBlockRenderTypes.setRenderLayer(ModBlocks.DEMON_STATUE.get(), RenderType.cutout());
+
+                    // If you need soft transparency/gradients, swap to translucent:
+                    // ItemBlockRenderTypes.setRenderLayer(ModBlocks.ANGEL_STATUE.get(), RenderType.translucent());
+                    // ItemBlockRenderTypes.setRenderLayer(ModBlocks.DEMON_STATUE.get(), RenderType.translucent());
+
+                    LOG.debug("[ClientSetup] Render layers set for statues (cutout).");
+                } catch (Throwable t) {
+                    LOG.error("[ClientSetup] Failed to set statue render layers: {}", t.toString());
+                }
+            });
+
+            LOG.debug("[ClientSetup] Registered TooltipHooks/InfuseClientEffects & render layers.");
         } catch (Throwable t) {
             LOG.error("[ClientSetup] Failed to register client listeners: {}", t.toString());
         }
