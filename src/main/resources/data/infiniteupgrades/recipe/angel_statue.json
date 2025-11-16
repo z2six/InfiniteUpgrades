@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "GGG",
+    "GIG",
+    "DDD"
+  ],
+  "key": {
+    "G": { "item": "minecraft:gold_block" },
+    "I": { "item": "minecraft:iron_ingot" },
+    "D": { "item": "minecraft:deepslate_tiles" }
+  },
+  "result": { "id": "infiniteupgrades:angel_statue", "count": 1 }
+}
