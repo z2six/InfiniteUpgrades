@@ -1,9 +1,0 @@
-{
-  "type": "minecraft:crafting_shaped",
-  "pattern": ["OOO","OGO","OOO"],
-  "key": {
-    "O": { "item": "minecraft:crying_obsidian" },
-    "G": { "item": "minecraft:gold_block" }
-  },
-  "result": { "id": "infiniteupgrades:celestial_sigil", "count": 1 }
-}

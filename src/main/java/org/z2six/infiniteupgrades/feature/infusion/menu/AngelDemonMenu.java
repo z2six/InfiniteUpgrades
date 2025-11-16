@@ -1,5 +1,6 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/menu/AngelDemonMenu.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/infusion/menu/AngelDemonMenu.java
 package org.z2six.infiniteupgrades.feature.infusion.menu;
+
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
 import com.mojang.datafixers.util.Pair;
@@ -26,7 +27,6 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
-import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
@@ -46,6 +46,9 @@ import java.util.regex.Pattern;
  * Angel/Demon menu (server-authoritative).
  * Pending attempt state is persisted via PendingStore (player persistent NBT), so closing the GUI
  * does not cancel or lose the attempt. The result is placed into slot 2 of the ritual slots attachment.
+ *
+ * NOTE: Angel/Demon sigil blocks were removed. Ritual type is no longer inferred from world blocks.
+ * We default to ANGEL. Later, if you want menu-side selection, we can add a toggle or a packet flag.
  */
 public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
@@ -89,7 +92,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private boolean suppressPreviewUpdate = false;
     private int previewChancePermille = 0;
 
-    private RitualType ritual = RitualType.ANGEL; // set from buf
+    private RitualType ritual = RitualType.ANGEL; // default; no world-based inference anymore
     private BlockPos anchorPos = BlockPos.ZERO;
     private final Player owner;
 
@@ -166,13 +169,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     public AngelDemonMenu(int id, Inventory inv, FriendlyByteBuf buf) {
         this(id, inv);
         try {
+            // Preserve anchor pos for RNG salting / persistence; ritual no longer depends on a block.
             this.anchorPos = buf.readBlockPos();
-            var lvl = inv.player.level();
-            if (lvl != null) {
-                var st = lvl.getBlockState(anchorPos);
-                this.ritual = (st != null && st.getBlock() == Infiniteupgrades.UNHOLY_SIGIL.get())
-                        ? RitualType.DEMON : RitualType.ANGEL;
-            }
+            this.ritual = RitualType.ANGEL; // fixed default; no sigil inference anymore
             LOG.debug("[AngelDemonMenu] Context: pos={} ritual={}", this.anchorPos, this.ritual);
 
             // Load saved items (server only)
@@ -234,11 +233,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     // --------- Client hooks (called by S2C handlers) ---------
 
-    /** Read by the screen to know if/how long to lock the Infuse button. */
     public long getClientLockEndGameTime()   { return clientLockEndGameTime; }
     public int  getClientLockDurationTicks() { return clientLockDurationTicks; }
 
-    // Back-compat helpers so existing S2C code can keep calling the old names
     public void clientOnInfuseStarted(long endGameTime, int durationTicks) {
         this.clientLockEndGameTime   = Math.max(0L, endGameTime);
         this.clientLockDurationTicks = Math.max(0,  durationTicks);
@@ -264,7 +261,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         if (payload.outcomeKnown()) clientOnEarlyOutcome(payload.willSucceed());
     }
 
-    // Convenience aliases (if you prefer the newer naming)
     public void clientApplyServerLock(long endGameTime, int durationTicks) { clientOnInfuseStarted(endGameTime, durationTicks); }
     public void clientClearServerLock() { clientOnInfuseResult(false); }
 
@@ -273,16 +269,11 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     // --------- Server: actual click handling & attempt start ---------
 
-    // --------- Server: actual click handling & attempt start ---------
-
     public void onInfuseButtonPressed(Player player) {
         try {
             if (player == null || player.level().isClientSide) return;
 
             // Decide which slot provides the input:
-            // - Prefer slot 0 (normal flow).
-            // - If slot 0 is empty AND slot 2 holds a real (non-preview) result that is a valid combat item,
-            //   we allow chain-infusing directly from slot 2.
             ItemStack in0  = baseInv.getItem(0);
             ItemStack out2 = baseInv.getItem(2);
 
@@ -334,7 +325,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             double bonus       = Reputation.computeBonusFor(player, ritual);
             double finalChance = Mth.clamp(baseChance + bonus, 0.0, 1.0);
 
-            // Consume soul resource now (server-authoritative, from the cage's NBT)
+            // Consume soul resource now
             if (soulCost > 0) {
                 boolean consumed = SoulCageItem.consumeUnits(res, soulCost);
                 if (!consumed) {
@@ -347,11 +338,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
             // Remove the source item from whichever slot we used (server authority)
             withPreviewSuppressed(() -> {
-                if (useOutputAsInput) {
-                    baseInv.setItem(2, ItemStack.EMPTY);
-                } else {
-                    baseInv.setItem(0, ItemStack.EMPTY);
-                }
+                if (useOutputAsInput) baseInv.setItem(2, ItemStack.EMPTY);
+                else baseInv.setItem(0, ItemStack.EMPTY);
             });
 
             // Roll deterministically (server-only)
@@ -390,7 +378,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     ModNet.sendInfuseResultTo(sp, this.containerId, success);
                 }
 
-                // Persist slots after changes (reflects that we consumed resource and removed the used input slot)
+                // Persist slots after changes
                 persistSlotsToAttachmentServer();
 
                 LOG.debug("[Infuse] armed: lvl={} ritual={} base={} bonus={} final={} roll={} success={} delayTicks={} (used {} as input, soulCost={})",
@@ -437,8 +425,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private void updatePreview() {
         try {
             if (owner != null && !owner.level().isClientSide) {
-                // If server just wrote a real result into the attachment and we already
-                // pulled it locally (slot 2 real), stop here so we don't clear it with a ghost.
                 if (hasRealResult()) return;
             }
 
@@ -492,7 +478,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
             int availableSouls = SoulCageItem.getTotal(res);
             if (availableSouls < soulCost) {
-                // Not enough souls for next level -> no preview
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
@@ -590,7 +575,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         if (saved == null) return;
 
         withPreviewSuppressed(() -> {
-            // Only slot 2 matters here; inputs stay whatever they currently are.
             baseInv.setItem(2, saved.s2().copy());
         });
         syncToClient("finalize pull result");
