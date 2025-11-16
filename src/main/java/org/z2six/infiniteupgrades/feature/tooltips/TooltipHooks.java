@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/tooltips/TooltipHooks.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/tooltips/TooltipHooks.java
 package org.z2six.infiniteupgrades.feature.tooltips;
 
 import com.mojang.logging.LogUtils;
@@ -8,6 +8,9 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
@@ -30,9 +33,16 @@ import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
  *
  * Now prefers the server-authored totals at iu_upgrade.totals{ attr -> sumPercent (fraction) }.
  * If missing, falls back to scanning history for stepPercent and compounding factors (legacy items).
+ *
+ * Also emits a custom "Block Speed (+X%)" line for mining tools when the tool_speed_bonus stat is present.
+ * The label uses a custom green (#00A800) and the numeric part in parentheses is aqua,
+ * so preview obfuscation can target the number.
  */
 public final class TooltipHooks {
     private static final Logger LOG = LogUtils.getLogger();
+
+    /** Toggle for chatty debug logs from this class. Set true only when needed. */
+    private static final boolean DEBUG_VERBOSE = false;
 
     // NBT layout
     private static final String ROOT_UPGRADE_TAG = "iu_upgrade";
@@ -48,6 +58,9 @@ public final class TooltipHooks {
         f.setMaximumFractionDigits(1);
         PCT_FMT = f;
     }
+
+    // Custom colors
+    private static final int BLOCK_SPEED_LABEL_RGB = 0x00A800; // #00a800
 
     private TooltipHooks() {}
 
@@ -67,85 +80,91 @@ public final class TooltipHooks {
                 // 2) Legacy fallback: scan history and aggregate signed stepPercent
                 pctByAttrId.putAll(aggregatePercentsFromHistory(stack));
             }
-            if (pctByAttrId.isEmpty()) return;
+            if (pctByAttrId.isEmpty()) {
+                // keep going—custom "Block Speed" may still need to be appended
+            } else {
+                // 3) Resolve registry to map display names -> percents
+                final RegistryAccess access = resolveRegistryAccess(event);
+                final Registry<Attribute> attrReg = (access != null) ? access.registryOrThrow(Registries.ATTRIBUTE) : null;
 
-            // 3) Resolve registry to map display names -> percents
-            final RegistryAccess access = resolveRegistryAccess(event);
-            final Registry<Attribute> attrReg = (access != null) ? access.registryOrThrow(Registries.ATTRIBUTE) : null;
+                final Map<String, Double> nameToPct = new LinkedHashMap<>();
+                for (Map.Entry<String, Double> e : pctByAttrId.entrySet()) {
+                    final String idStr = e.getKey();
+                    final Double pct = e.getValue();
+                    if (pct == null) continue;
 
-            final Map<String, Double> nameToPct = new LinkedHashMap<>();
-            for (Map.Entry<String, Double> e : pctByAttrId.entrySet()) {
-                final String idStr = e.getKey();
-                final Double pct = e.getValue();
-                if (pct == null) continue;
-
-                boolean added = false;
-                try {
-                    if (attrReg != null) {
-                        ResourceLocation rl = ResourceLocation.tryParse(idStr);
-                        if (rl != null && attrReg.containsKey(rl)) {
-                            Attribute attr = attrReg.get(rl);
-                            if (attr != null) {
-                                String display = Component.translatable(attr.getDescriptionId()).getString();
-                                if (display != null && !display.isBlank()) {
-                                    nameToPct.put(display.toLowerCase(Locale.ROOT), pct * 100.0);
-                                    added = true;
+                    boolean added = false;
+                    try {
+                        if (attrReg != null) {
+                            ResourceLocation rl = ResourceLocation.tryParse(idStr);
+                            if (rl != null && attrReg.containsKey(rl)) {
+                                Attribute attr = attrReg.get(rl);
+                                if (attr != null) {
+                                    String display = Component.translatable(attr.getDescriptionId()).getString();
+                                    if (display != null && !display.isBlank()) {
+                                        nameToPct.put(display.toLowerCase(Locale.ROOT), pct * 100.0);
+                                        added = true;
+                                    }
                                 }
                             }
                         }
+                    } catch (Throwable t) {
+                        debug("Registry resolution failed for {}: {}", idStr, t.toString());
                     }
-                } catch (Throwable t) {
-                    debug("Registry resolution failed for {}: {}", idStr, t.toString());
-                }
 
-                if (!added) {
-                    String human = humanizeId(idStr);
-                    if (!human.isBlank()) {
-                        nameToPct.putIfAbsent(human, pct * 100.0);
-                    }
-                }
-            }
-
-            // 4) Append "(±X%)" after matching attribute lines
-            int appended = 0;
-            for (int i = 0; i < tooltip.size(); i++) {
-                final Component line = tooltip.get(i);
-                final String plain = line.getString().toLowerCase(Locale.ROOT);
-
-                String matched = null;
-                Double pct = null;
-                for (Map.Entry<String, Double> e : nameToPct.entrySet()) {
-                    final String needle = e.getKey();
-                    if (!needle.isEmpty() && plain.contains(needle)) {
-                        matched = needle;
-                        pct = e.getValue();
-                        break;
+                    if (!added) {
+                        String human = humanizeId(idStr);
+                        if (!human.isBlank()) {
+                            nameToPct.putIfAbsent(human, pct * 100.0);
+                        }
                     }
                 }
-                if (matched == null || pct == null) continue;
 
-                if (Math.abs(pct) < 0.0001) continue;
+                // 4) Append "(±X%)" after matching attribute lines
+                for (int i = 0; i < tooltip.size(); i++) {
+                    final Component line = tooltip.get(i);
+                    final String plain = line.getString().toLowerCase(Locale.ROOT);
 
-                final String pctText = (pct >= 0 ? "(+" : "(") + trimZeros(pct) + "%)";
-                final ChatFormatting color = pct > 0.0001 ? ChatFormatting.AQUA
-                        : pct < -0.0001 ? ChatFormatting.RED
-                        : ChatFormatting.GRAY;
+                    String matched = null;
+                    Double pct = null;
+                    for (Map.Entry<String, Double> e : nameToPct.entrySet()) {
+                        final String needle = e.getKey();
+                        if (!needle.isEmpty() && plain.contains(needle)) {
+                            matched = needle;
+                            pct = e.getValue();
+                            break;
+                        }
+                    }
+                    if (matched == null || pct == null) continue;
 
-                tooltip.set(i, line.copy().append(Component.literal(" " + pctText).withStyle(color)));
-                appended++;
+                    if (Math.abs(pct) < 0.0001) continue;
+
+                    final String pctText = (pct >= 0 ? "(+" : "(") + trimZeros(pct) + "%)";
+                    final ChatFormatting color = pct > 0.0001 ? ChatFormatting.AQUA
+                            : pct < -0.0001 ? ChatFormatting.RED
+                            : ChatFormatting.GRAY;
+
+                    tooltip.set(i, line.copy().append(Component.literal(" " + pctText).withStyle(color)));
+                }
             }
         } catch (Throwable t) {
             LOG.error("[InfiniteUpgrades] Tooltip augmentation failed (defensive skip).", t);
         }
-        // Append custom tool stat line if present
+
+        // Append custom tool stat line if present:
+        // "Block Speed " in #00A800, then "(+X%)" in aqua so the preview obfuscator hits the numbers in parens.
         try {
             final ItemStack stack = event.getItemStack();
             if (ToolSpeedUtil.isMiningTool(stack)) {
                 double frac = ToolSpeedUtil.getBonus(stack);
                 if (Math.abs(frac) > 1.0e-6) {
                     String pct = ToolSpeedUtil.formatPercentNoSign(frac); // "15%" etc.
-                    event.getToolTip().add(Component.literal("Block Speed +" + pct).withStyle(ChatFormatting.AQUA));
-                    debug("Tooltip: appended Block Speed +{}", pct);
+                    MutableComponent line =
+                            Component.literal(" Block Speed ")
+                                    .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(BLOCK_SPEED_LABEL_RGB)))
+                                    .append(Component.literal("(+" + pct + ")").withStyle(ChatFormatting.AQUA));
+                    event.getToolTip().add(line);
+                    debug("Tooltip: appended Block Speed (+{}) with custom green label", pct);
                 }
             }
         } catch (Throwable t) {
@@ -217,9 +236,10 @@ public final class TooltipHooks {
         return s;
     }
 
+    /** Centralized debug gate. Flip {@link #DEBUG_VERBOSE} to enable these logs. */
     private static void debug(String msg, Object... args) {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("[InfiniteUpgrades][Tooltip] " + msg, args);
-        }
+        if (!DEBUG_VERBOSE) return;            // hard switch for spam control
+        if (!LOG.isDebugEnabled()) return;     // respect logger level too
+        LOG.debug("[InfiniteUpgrades][Tooltip] " + msg, args);
     }
 }

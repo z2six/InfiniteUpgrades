@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/DetailsPanelView.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/infusion/client/screen/view/DetailsPanelView.java
 package org.z2six.infiniteupgrades.feature.infusion.client.screen.view;
 
 import com.mojang.logging.LogUtils;
@@ -278,7 +278,7 @@ public final class DetailsPanelView {
         addWrapped(itemName, ChatFormatting.WHITE, width);
         addBlank();
 
-        // Section: Next attempt preview
+        // Section: Next attempt
         addHeader("Next attempt");
         Double ruleStep = uniqueRuleStepForThisItem(subj, ritual);
         if (ruleStep != null) {
@@ -287,7 +287,7 @@ public final class DetailsPanelView {
             addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.WHITE, width);
         }
 
-        // Chance line with reputation breakdown
+        // Chance (with reputation)
         ChanceParts chance = computeChanceWithRep(subj, ritual);
         String repBonusStr = (chance.repBonus >= 0 ? "+" : "")
                 + PCT1.format(chance.repBonus * 100.0) + "%";
@@ -298,25 +298,25 @@ public final class DetailsPanelView {
                 + PCT1.format(chance.base * 100.0) + "% " + repBonusStr
                 + " from " + repUnifiedStr + " rep)", ChatFormatting.WHITE, width);
 
-        // NEW: soul cost line (based on server config model)
+        // Soul cost line (same model as server deduction)
         buildSoulCostLine(subj, width);
 
         // Divider
         addBlank();
 
-        // Section: Totals (accumulated) — white
+        // Totals
         addHeader("Totals");
         buildTotals(subj, width);
 
         addBlank();
 
-        // Section: Recent history — white
+        // Recent history
         addHeader("Recent history");
         buildRecentHistory(subj, width);
 
         addBlank();
 
-        // Section: Possible upgrades for this item (filtered by present attributes) — white
+        // Possible upgrades (now also shows Block Speed for mining tools)
         addHeader("Possible upgrades");
         buildPossibleUpgradesForItem(subj, ritual, width);
 
@@ -464,6 +464,24 @@ public final class DetailsPanelView {
             addWrapped(line, ChatFormatting.WHITE, width);
             shown++;
         }
+
+        // NEW: also surface the custom Block Speed stat for mining tools
+        try {
+            if (ToolSpeedUtil.isMiningTool(s)) {
+                double perLevel = snap.percentBonusForLevelUp(level); // fraction
+                double step = Math.max(0.0, perLevel) * Math.max(0.0, ritualMult);
+                if (step > 0.0) {
+                    String line = BULLET + "Block Speed  (+" + PCT1.format(step * 100.0) + "% per upgrade)";
+                    addWrapped(line, ChatFormatting.WHITE, width);
+                    shown++;
+                    LOG.debug("[DetailsPanelView] PossibleUpgrades: show Block Speed step={} (level={}, ritualMult={})",
+                            String.format(java.util.Locale.ROOT, "%.5f", step), level, ritualMult);
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] buildPossibleUpgradesForItem: tool_speed entry failed: {}", t.toString());
+        }
+
         if (shown == 0) {
             addWrapped(BULLET + "—", ChatFormatting.WHITE, width);
         }
