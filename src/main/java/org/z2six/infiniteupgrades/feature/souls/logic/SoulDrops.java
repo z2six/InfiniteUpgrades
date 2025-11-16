@@ -16,7 +16,6 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
-import org.z2six.infiniteupgrades.feature.souls.light.SoulLightService;
 import org.z2six.infiniteupgrades.feature.souls.entity.SoulOrbEntity;
 
 import java.util.Locale;
@@ -124,18 +123,6 @@ public final class SoulDrops {
             var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
             orb.setHoverBaseY(y);
             lvl.addFreshEntity(orb);
-
-            // Register & place its static light (server side only) per config
-            if (lvl instanceof ServerLevel sl) {
-                if (cfg.spawnLights && cfg.lightRadiusBlocks > 0) {
-                    final int lightLevel = Math.min(15, cfg.lightRadiusBlocks + 1); // radius≈level-1
-                    final BlockPos posForLight = BlockPos.containing(at.x, at.y, at.z);
-                    final long expiresAt = sl.getGameTime() + lifetimeTicks + 5L;
-
-                    SoulLightService.get(sl).registerAndPlace(sl, posForLight, lightLevel, expiresAt, orb.getUUID());
-                    orb.setLightAnchor(posForLight);
-                }
-            }
 
             // Visibility ping: small sparkle cluster at spawn
             if (lvl instanceof ServerLevel sl) {

@@ -11,7 +11,6 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
-import org.z2six.infiniteupgrades.feature.souls.light.SoulLightService;
 import org.z2six.infiniteupgrades.feature.souls.entity.SoulOrbEntity;
 
 /**
@@ -47,16 +46,6 @@ public final class StartupCleanup {
         for (SoulOrbEntity orb : sl.getEntitiesOfClass(SoulOrbEntity.class, huge)) {
             orb.discard();
             removedSouls++;
-        }
-
-        // 2) Ask the light service to purge *all* of its records and remove any associated light data/blocks
-        int removedLights = SoulLightService.get(sl).removeAll(sl);
-
-        if (removedSouls > 0 || removedLights > 0) {
-            LOG.info("[StartupCleanup] {}: dim={}, removed souls={}, removed lights={}",
-                    reason, sl.dimension().location(), removedSouls, removedLights);
-        } else if (LOG.isDebugEnabled()) {
-            LOG.debug("[StartupCleanup] {}: dim={}, nothing to clean.", reason, sl.dimension().location());
         }
     }
 }

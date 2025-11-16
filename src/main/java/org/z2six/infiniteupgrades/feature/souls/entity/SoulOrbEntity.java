@@ -20,8 +20,6 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
-import org.z2six.infiniteupgrades.feature.souls.light.LightScheduler;
-import org.z2six.infiniteupgrades.feature.souls.light.SoulLightService;
 
 import java.util.List;
 import java.util.Locale;
@@ -153,13 +151,6 @@ public class SoulOrbEntity extends Entity {
     public void tick() {
         super.tick();
 
-        if (this.tickCount > this.lifetime) {
-            // lifetime over: clean up light (server) and discard
-            if (!level().isClientSide) cleanupLight();
-            this.discard();
-            return;
-        }
-
         if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
             LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), dim={}, lifeLeft={}t, homing={}",
                     this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
@@ -207,9 +198,6 @@ public class SoulOrbEntity extends Entity {
                 homing = true;
                 homingTicks = 0;
                 homingTargetId = best.getUUID();
-
-                // NEW: remove static light immediately when homing starts
-                cleanupLight();
             }
         }
 
@@ -278,7 +266,6 @@ public class SoulOrbEntity extends Entity {
         }
 
         // Light is already removed when homing started; ensure idempotency
-        cleanupLight();
         this.discard();
     }
 
@@ -339,27 +326,9 @@ public class SoulOrbEntity extends Entity {
         this.lightCleared = false;
     }
 
-    /** Attempt to clear the static light if we registered one. Server side only. */
-    private void cleanupLight() {
-        if (this.lightCleared) return;
-        if (this.lightAnchor == null) { this.lightCleared = true; return; }
-        if (!(this.level() instanceof ServerLevel sl)) { return; }
-
-        // Schedule actual removal and update persisted registry
-        LightScheduler.queueRemove(sl, this.lightAnchor);
-        SoulLightService.get(sl).recordRemoved(this.lightAnchor);
-
-        this.lightCleared = true;
-
-        if (LOG_SPAWN) {
-            LOG.info("[SoulOrbEntity] cleanupLight: id={}, removed light @ {}", this.getId(), this.lightAnchor);
-        }
-    }
-
     /** Called when entity is fully removed from the world (e.g., chunk unload, world quit). */
     @Override
     public void onRemovedFromLevel() {
-        if (!this.level().isClientSide) cleanupLight();
         super.onRemovedFromLevel();
     }
 }
