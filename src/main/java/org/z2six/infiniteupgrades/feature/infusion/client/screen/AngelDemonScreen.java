@@ -325,7 +325,8 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
                             lower.contains("attack speed")  ||
                             lower.contains("armor toughness") ||
                             (lower.contains(" armor") && !lower.contains("armor trim")) ||
-                            lower.contains("knockback resistance");
+                            lower.contains("knockback resistance") ||
+                            lower.contains("block speed");
 
             if (!isCombatLine) {
                 out.add(c);

@@ -11,6 +11,7 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
@@ -32,6 +33,7 @@ import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
+import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 import org.z2six.infiniteupgrades.feature.infusion.logic.AttemptRng;
 import org.z2six.infiniteupgrades.feature.infusion.logic.PendingStore;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
@@ -47,6 +49,9 @@ import java.util.regex.Pattern;
  * Angel/Demon menu (server-authoritative).
  * - Server ctor variants load persisted slots.
  * - Buf-ctor reads ritual & anchor from the buffer; client sees correct context.
+ *
+ * Change: allow mining tools (pickaxe/shovel/axe/hoe) in input slot alongside combat gear.
+ *         Also log when a mining tool is accepted into the input slot.
  */
 public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
@@ -179,7 +184,15 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 if (owner != null && !owner.level().isClientSide) {
                     if (PendingStore.read((net.minecraft.server.level.ServerPlayer)owner).active()) return false;
                 }
-                return isCombatItem(stack);
+                boolean ok = isUpgradeableItem(stack);
+                if (ok) {
+                    // Log accepted mining tools specifically (to latest.log)
+                    if (isMiningTool(stack)) {
+                        LOG.info("[AngelDemonMenu] Accepted mining tool in input: {} ({})",
+                                stack.getItem().toString(), describeToolClass(stack));
+                    }
+                }
+                return ok;
             }
         });
         this.addSlot(new Slot(baseInv, 1, INPUT2_X, INPUT2_Y) {
@@ -316,13 +329,13 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack out2 = baseInv.getItem(2);
 
             boolean outputIsReal = !out2.isEmpty() && !isPreview(out2);
-            boolean useOutputAsInput = in0.isEmpty() && outputIsReal && isCombatItem(out2);
+            boolean useOutputAsInput = in0.isEmpty() && outputIsReal && isUpgradeableItem(out2);
 
             ItemStack effectiveIn = useOutputAsInput ? out2 : in0;
             ItemStack res         = baseInv.getItem(1);
 
-            if (effectiveIn.isEmpty() || !isCombatItem(effectiveIn)) {
-                LOG.debug("[AngelDemonMenu] Infuse ignored: no valid combat item in input");
+            if (effectiveIn.isEmpty() || !isUpgradeableItem(effectiveIn)) {
+                LOG.debug("[AngelDemonMenu] Infuse ignored: no valid upgradable item in input");
                 return;
             }
             if (res.isEmpty() || !SoulCageItem.isCage(res)) {
@@ -457,7 +470,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack in = baseInv.getItem(0);
             ItemStack res = baseInv.getItem(1);
 
-            if (in.isEmpty() || !isCombatItem(in) || res.isEmpty() || !SoulCageItem.isCage(res)) {
+            if (in.isEmpty() || !isUpgradeableItem(in) || res.isEmpty() || !SoulCageItem.isCage(res)) {
                 withPreviewSuppressed(() -> {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
@@ -534,6 +547,22 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
 
             preview.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
+
+            try {
+                if (isMiningTool(in)) {
+                    double curBonus = ToolSpeedUtil.getBonus(in);       // fraction
+                    double nextBonus = Math.max(0.0, curBonus + step);  // same per-level step you show elsewhere
+                    // Write into the PREVIEW copy only (iu_preview true below)
+                    ToolSpeedUtil.setBonus(preview, nextBonus);
+                    LOG.debug("[AngelDemonMenu] Preview tool_speed_bonus next={} (cur={} step={}) for {}",
+                            String.format(java.util.Locale.ROOT, "%.5f", nextBonus),
+                            String.format(java.util.Locale.ROOT, "%.5f", curBonus),
+                            String.format(java.util.Locale.ROOT, "%.5f", step),
+                            in.getItem());
+                }
+            } catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] updatePreview: tool_speed_bonus preview write failed: {}", t.toString());
+            }
 
             CustomData cd = preview.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
             CustomData updated = cd.update(tag -> {
@@ -630,7 +659,18 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         return false;
     }
 
-    private boolean isCombatItem(ItemStack stack) {
+    /** NEW: accept pickaxe/shovel/axe/hoe in addition to existing combat gear. */
+    private static boolean isUpgradeableItem(ItemStack stack) {
+        return isMiningTool(stack) || isCombatItemLegacy(stack);
+    }
+
+    /** Tool detection via vanilla item tags, with a DiggerItem fallback. */
+    private static boolean isMiningTool(ItemStack stack) {
+        return ToolSpeedUtil.isMiningTool(stack);
+    }
+
+    /** Keep the original combat acceptance logic as a separate helper. */
+    private static boolean isCombatItemLegacy(ItemStack stack) {
         if (stack.isEmpty()) return false;
         try {
             if (hasCombatAttributes(stack.getAttributeModifiers())) return true;
@@ -639,13 +679,25 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             Item it = stack.getItem();
             if (it instanceof ArmorItem) return true;
             if (it instanceof SwordItem) return true;
-            if (it instanceof DiggerItem) return true;
+            if (it instanceof DiggerItem) return true; // note: legacy path also allowed tools
             if (it instanceof TridentItem) return true;
             if (it instanceof BowItem) return true;
             if (it instanceof CrossbowItem) return true;
             if (it instanceof ShieldItem) return true;
-        } catch (Throwable t) { LOG.error("[AngelDemonMenu] isCombatItem failed: {}", t.toString()); }
+        } catch (Throwable t) { LogUtils.getLogger().error("[AngelDemonMenu] isCombatItemLegacy failed: {}", t.toString()); }
         return false;
+    }
+
+    /** For readable logs when a tool is accepted. */
+    private static String describeToolClass(ItemStack s) {
+        try {
+            if (s.is(ItemTags.PICKAXES)) return "pickaxe";
+            if (s.is(ItemTags.SHOVELS))  return "shovel";
+            if (s.is(ItemTags.AXES))     return "axe";
+            if (s.is(ItemTags.HOES))     return "hoe";
+            if (s.getItem() instanceof DiggerItem) return "digger";
+        } catch (Throwable ignored) {}
+        return "tool";
     }
 
     private static Pair<Component, Integer> parseBaseNameAndLevel(Component name) {
@@ -729,7 +781,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             ItemStack copy = stack.copy();
 
             if (index >= 3) {
-                if (isCombatItem(stack)) {
+                if (isUpgradeableItem(stack)) {
                     if (!this.moveItemStackTo(stack, 0, 1, false)) return ItemStack.EMPTY;
                 } else if (SoulCageItem.isCage(stack)) {
                     if (!this.moveItemStackTo(stack, 1, 2, false)) return ItemStack.EMPTY;

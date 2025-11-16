@@ -26,6 +26,7 @@ import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
 import org.z2six.infiniteupgrades.feature.infusion.logic.UpgradeService;
 import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
+import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 
 import java.text.DecimalFormat;
 import java.util.*;
@@ -344,6 +345,20 @@ public final class DetailsPanelView {
                     (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%" +
                     " (+" + count + ")";
             addWrapped(line, ChatFormatting.WHITE, width);
+        }
+        // Append our custom tool stat if this is a mining tool
+        try {
+            if (ToolSpeedUtil.isMiningTool(s)) {
+                double bonus = ToolSpeedUtil.getBonus(s); // fraction
+                if (Math.abs(bonus) > 1.0e-6) {
+                    String pct = ToolSpeedUtil.formatPercentNoSign(bonus); // e.g. "15%"
+                    String line = BULLET + "Block Speed +" + pct;
+                    addWrapped(line, ChatFormatting.AQUA, width);
+                    LOG.debug("[DetailsPanelView] Totals: show tool_speed_bonus {} for {}", pct, s.getItem());
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] buildTotals: tool_speed_bonus read failed: {}", t.toString());
         }
     }
 

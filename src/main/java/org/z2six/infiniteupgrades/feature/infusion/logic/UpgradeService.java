@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.ChanceModelType;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.Snapshot;
+import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 
 import java.util.*;
 
@@ -227,6 +228,27 @@ public final class UpgradeService {
         // Commit modifiers + name
         copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
         applyColoredSuffix(copy, newLevel);
+
+        // --- Also bump tool break-speed stat for mining tools (server-authoritative) ---
+        try {
+            if (ToolSpeedUtil.isMiningTool(copy)) {
+                // Use the same visible per-level step model you show in the UI preview:
+                // percentBonusForLevelUp(currentLevel) * ritual multiplier (angel/demon)
+                double perLevelStep = UpgradeServerConfig.snapshot().percentBonusForLevelUp(currentLevel);
+                double stepForRitual = perLevelStep * Math.max(0.0, ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult);
+                if (stepForRitual > 0.0) {
+                    double cur = ToolSpeedUtil.getBonus(copy);
+                    double next = cur + stepForRitual;
+                    ToolSpeedUtil.setBonus(copy, next);
+                    LOG.info("[UpgradeService] Applied tool_speed_bonus: old={} new={} item={}",
+                            String.format(java.util.Locale.ROOT, "%.5f", cur),
+                            String.format(java.util.Locale.ROOT, "%.5f", next),
+                            copy.getItem());
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());
+        }
 
         return new Result(copy, true, newLevel);
     }

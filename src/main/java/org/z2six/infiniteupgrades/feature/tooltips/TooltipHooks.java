@@ -23,6 +23,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
+
 /**
  * TooltipHooks – client-side tooltip augmentation for InfiniteUpgrades.
  *
@@ -134,6 +136,20 @@ public final class TooltipHooks {
             }
         } catch (Throwable t) {
             LOG.error("[InfiniteUpgrades] Tooltip augmentation failed (defensive skip).", t);
+        }
+        // Append custom tool stat line if present
+        try {
+            final ItemStack stack = event.getItemStack();
+            if (ToolSpeedUtil.isMiningTool(stack)) {
+                double frac = ToolSpeedUtil.getBonus(stack);
+                if (Math.abs(frac) > 1.0e-6) {
+                    String pct = ToolSpeedUtil.formatPercentNoSign(frac); // "15%" etc.
+                    event.getToolTip().add(Component.literal("Block Speed +" + pct).withStyle(ChatFormatting.AQUA));
+                    debug("Tooltip: appended Block Speed +{}", pct);
+                }
+            }
+        } catch (Throwable t) {
+            debug("Tooltip: tool_speed_bonus append failed: {}", t.toString());
         }
     }
 
