@@ -89,6 +89,8 @@ public final class DetailsPanelView {
     private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
     private static final DecimalFormat PCT0 = new DecimalFormat("0");
 
+    private static final String BLOCK_SPEED_KEY = "infiniteupgrades:block_speed";
+
     public DetailsPanelView(AngelDemonScreen screen) {
         this.screen = screen;
     }
@@ -348,13 +350,13 @@ public final class DetailsPanelView {
         }
         // Append our custom tool stat if this is a mining tool
         try {
-            if (ToolSpeedUtil.isMiningTool(s)) {
+            if (ToolSpeedUtil.isMiningTool(s) && !tot.containsKey(BLOCK_SPEED_KEY)) {
                 double bonus = ToolSpeedUtil.getBonus(s); // fraction
                 if (Math.abs(bonus) > 1.0e-6) {
                     String pct = ToolSpeedUtil.formatPercentNoSign(bonus); // e.g. "15%"
                     String line = BULLET + "Block Speed +" + pct;
-                    addWrapped(line, ChatFormatting.AQUA, width);
-                    LOG.debug("[DetailsPanelView] Totals: show tool_speed_bonus {} for {}", pct, s.getItem());
+                    addWrapped(line, ChatFormatting.WHITE, width);
+                    LOG.debug("[DetailsPanelView] Totals: show tool_speed_bonus {} for {} (fallback, no totals key)", pct, s.getItem());
                 }
             }
         } catch (Throwable t) {
@@ -662,6 +664,9 @@ public final class DetailsPanelView {
     }
 
     private String resolveAttrDisplayName(String attrId) {
+        // Capitalize our synthetic stat
+        if (BLOCK_SPEED_KEY.equals(attrId)) return "Block Speed";
+
         try {
             var mc = screen.getMinecraft();
             if (mc != null && mc.level != null) {

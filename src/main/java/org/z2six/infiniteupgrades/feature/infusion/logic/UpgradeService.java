@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/UpgradeService.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/infusion/logic/UpgradeService.java
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;
@@ -67,6 +67,9 @@ public final class UpgradeService {
     private static final String H_LAFT   = "levelAfter";
     private static final String H_CHANGE = "change";       // +1 success, -1 downgrade
 
+    // Synthetic attribute id for our custom mining stat (not a vanilla attribute)
+    private static final ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
+
     // -------------------- Chance (base model only; rep handled in menu) --------------------
 
     public static double getSuccessChance(int currentLevel) {
@@ -100,12 +103,6 @@ public final class UpgradeService {
      *   2) Otherwise, compute:
      *
      *        cost(L -> L+1) = baseCost * (expBase ^ L) * scale
-     *
-     *      where all three (baseCost, expBase, scale) come from the Souls config.
-     *
-     *   - baseCost >= 0
-     *   - expBase >= 1.0 (clamped)
-     *   - scale   >= 0
      *
      * The return value is an int >= 0, clamped to Integer.MAX_VALUE.
      */
@@ -181,27 +178,61 @@ public final class UpgradeService {
 
         // Present & rule-backed attributes
         List<ResourceLocation> present = presentRuleBackedIds(working, rules.keySet());
-        if (present.isEmpty()) return new Result(copy, false, currentLevel);
 
-        // Ensure bases / totals structures exist
+        // ---- Make Block Speed a first-class candidate (if the item is a mining tool)
+        boolean isMiningTool = false;
+        try { isMiningTool = ToolSpeedUtil.isMiningTool(copy); } catch (Throwable ignored) {}
+        List<ResourceLocation> candidates = new ArrayList<>(present);
+        if (isMiningTool) {
+            candidates.add(BLOCK_SPEED_ID); // pseudo-attribute; will be handled specially
+        }
+        if (candidates.isEmpty()) return new Result(copy, false, currentLevel);
+
+        // Ensure bases / totals structures exist (for vanilla attributes only; block_speed has no base)
         ensureBases(copy, working, present);
+
         // We'll update totals/history atomically (single batch)
         long batchId = System.nanoTime();
 
-        // Resolve ritual step multiplier
+        // Ritual multiplier
         double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
 
-        // Determine which attributes are touched this attempt
+        // Determine which attributes are touched this attempt:
+        // - ANGEL -> all candidates (vanilla present attrs + block_speed if mining)
+        // - DEMON -> exactly one picked from candidates (weighted by rule weight if present; default 1)
         List<ResourceLocation> touched;
         if (ritual == RitualType.ANGEL) {
-            touched = present;
+            touched = candidates;
         } else {
-            touched = List.of(weightedPick(rand, present, rules));
+            touched = List.of(weightedPickAllowingSynthetic(rand, candidates, rules));
         }
 
-        // For each touched attribute, compute the signed step and apply it to totals; we will recompute all modifier amounts afterwards.
+        // For each touched attribute, compute the signed step and apply it to totals/history.
         List<AttrStep> steps = new ArrayList<>();
         for (ResourceLocation id : touched) {
+            if (id.equals(BLOCK_SPEED_ID)) {
+                // Custom per-level step for block speed comes from your percentBonusForLevelUp model
+                double baseStep = snap.percentBonusForLevelUp(currentLevel); // fraction
+                double step = Math.max(0.0, baseStep) * Math.max(0.0, ritualMult);
+                if (step <= 0.0) continue;
+
+                // Apply to the item NBT (authoritative stat)
+                try {
+                    double cur = ToolSpeedUtil.getBonus(copy);
+                    double next = cur + step;
+                    ToolSpeedUtil.setBonus(copy, next);
+                    LOG.info("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={}",
+                            ritual, fmt(cur), fmt(next), fmt(step));
+                } catch (Throwable t) {
+                    LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());
+                }
+
+                // Record a canonical step so it appears in Totals & Recent History
+                steps.add(new AttrStep(BLOCK_SPEED_ID, /*signedPercent=*/ step, "pct_step", "ADD_VALUE"));
+                continue;
+            }
+
+            // Vanilla/attribute-backed rule
             var rule = rules.get(id);
             if (rule == null) continue;
 
@@ -209,7 +240,6 @@ public final class UpgradeService {
             double step = Math.max(0.0, baseStep) * Math.max(0.0, ritualMult);
             if (step <= 0.0) continue;
 
-            // Signed step: INCREASE => +step, DECREASE => -step
             double signed = (rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step;
             steps.add(new AttrStep(id, signed, "pct_step", "ADD_VALUE"));
         }
@@ -222,33 +252,13 @@ public final class UpgradeService {
         int newLevel = Math.min(currentLevel + 1, snap.maxLevel);
         appendStepsAndUpdateTotals(copy, steps, /*change*/+1, batchId, currentLevel, newLevel);
 
-        // Recompute ALL managed attributes deterministically from bases × (1 + sumPercent)
+        // Recompute ALL managed vanilla attributes deterministically from bases × (1 + sumPercent)
+        // (The synthetic block_speed has no vanilla Attribute to recompute; it's carried by its own NBT.)
         List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
-
-        // Commit modifiers + name
         copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
-        applyColoredSuffix(copy, newLevel);
 
-        // --- Also bump tool break-speed stat for mining tools (server-authoritative) ---
-        try {
-            if (ToolSpeedUtil.isMiningTool(copy)) {
-                // Use the same visible per-level step model you show in the UI preview:
-                // percentBonusForLevelUp(currentLevel) * ritual multiplier (angel/demon)
-                double perLevelStep = UpgradeServerConfig.snapshot().percentBonusForLevelUp(currentLevel);
-                double stepForRitual = perLevelStep * Math.max(0.0, ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult);
-                if (stepForRitual > 0.0) {
-                    double cur = ToolSpeedUtil.getBonus(copy);
-                    double next = cur + stepForRitual;
-                    ToolSpeedUtil.setBonus(copy, next);
-                    LOG.info("[UpgradeService] Applied tool_speed_bonus: old={} new={} item={}",
-                            String.format(java.util.Locale.ROOT, "%.5f", cur),
-                            String.format(java.util.Locale.ROOT, "%.5f", next),
-                            copy.getItem());
-                }
-            }
-        } catch (Throwable t) {
-            LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());
-        }
+        // Commit name suffix
+        applyColoredSuffix(copy, newLevel);
 
         return new Result(copy, true, newLevel);
     }
@@ -290,7 +300,8 @@ public final class UpgradeService {
 
                 if (!inverse.isEmpty()) {
                     appendStepsAndUpdateTotals(copy, inverse, /*change*/-1, System.nanoTime(), currentLevel, newLevel);
-                    // Recompute all amounts from totals
+
+                    // Recompute vanilla attributes
                     Snapshot snap = UpgradeServerConfig.snapshot();
                     Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> rules = new LinkedHashMap<>();
                     for (var r : snap.attributes) if (r.enabled) rules.put(r.id, r);
@@ -301,6 +312,17 @@ public final class UpgradeService {
                     );
                     List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
                     copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
+
+                    // If that batch touched block_speed, mirror the inverse on the custom stat too
+                    // by reconstructing the net delta from inverse steps.
+                    double deltaBlock = 0.0;
+                    for (AttrStep st : inverse) {
+                        if (BLOCK_SPEED_ID.equals(st.id)) deltaBlock += st.signedPercent;
+                    }
+                    if (Math.abs(deltaBlock) > 1e-12) {
+                        double cur = ToolSpeedUtil.getBonus(copy);
+                        ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
+                    }
 
                     applyColoredSuffix(copy, newLevel);
                     return copy;
@@ -332,6 +354,15 @@ public final class UpgradeService {
                     );
                     List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
                     copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
+
+                    double deltaBlock = 0.0;
+                    for (AttrStep st : inverse) {
+                        if (BLOCK_SPEED_ID.equals(st.id)) deltaBlock += st.signedPercent;
+                    }
+                    if (Math.abs(deltaBlock) > 1e-12) {
+                        double cur = ToolSpeedUtil.getBonus(copy);
+                        ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
+                    }
 
                     applyColoredSuffix(copy, newLevel);
                     return copy;
@@ -393,7 +424,7 @@ public final class UpgradeService {
                 ev.putLong(H_BATCH, batchId);
                 ev.putString(H_ATTR, attrKey);
                 ev.putString(H_OP, s.op); // informational
-                ev.putDouble(H_OLD, 0.0); // optional (not needed anymore)
+                ev.putDouble(H_OLD, 0.0); // optional (not used)
                 ev.putDouble(H_DELTA, 0.0);
                 ev.putDouble(H_NEW, 0.0);
                 ev.putDouble(H_STEP_P, s.signedPercent); // canonical signed fraction
@@ -643,16 +674,24 @@ public final class UpgradeService {
         return out;
     }
 
-    private static ResourceLocation weightedPick(RandomSource rand, List<ResourceLocation> present, Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> rules) {
+    /** Weighted pick that also supports our synthetic BLOCK_SPEED_ID (defaults to weight=1 if not in rules). */
+    private static ResourceLocation weightedPickAllowingSynthetic(RandomSource rand,
+                                                                  List<ResourceLocation> candidates,
+                                                                  Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> rules) {
         int totalW = 0;
-        for (ResourceLocation id : present) totalW += Math.max(0, rules.get(id).weight);
-        if (totalW <= 0) totalW = present.size();
+        for (ResourceLocation id : candidates) {
+            int w = (rules.containsKey(id) ? Math.max(0, rules.get(id).weight) : 1);
+            totalW += (w <= 0 ? 1 : w);
+        }
+        if (totalW <= 0) totalW = candidates.size();
 
         int r = rand.nextInt(totalW);
-        ResourceLocation chosen = present.get(0);
+        ResourceLocation chosen = candidates.get(0);
         int acc = 0;
-        for (ResourceLocation id : present) {
-            acc += Math.max(0, rules.get(id).weight);
+        for (ResourceLocation id : candidates) {
+            int w = (rules.containsKey(id) ? Math.max(0, rules.get(id).weight) : 1);
+            w = (w <= 0 ? 1 : w);
+            acc += w;
             if (r < acc) { chosen = id; break; }
         }
         return chosen;
@@ -679,5 +718,10 @@ public final class UpgradeService {
             if (b > best) best = b;
         }
         return best;
+    }
+
+    // --- tiny util
+    private static String fmt(double x) {
+        return String.format(java.util.Locale.ROOT, "%.5f", x);
     }
 }
