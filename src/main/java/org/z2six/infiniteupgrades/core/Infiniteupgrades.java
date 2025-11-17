@@ -113,6 +113,9 @@ public class Infiniteupgrades {
             NeoForge.EVENT_BUS.addListener(RepEvents::onPlayerClone);
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.InfuseTimers::onLevelTick);
             NeoForge.EVENT_BUS.addListener(RepCommands::register);
+
+            // NEW: multiply mining speed by our "block_speed" bonus
+            NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.BreakSpeedHooks::onBreakSpeed);
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to register game listeners", t);
         }
@@ -144,9 +147,28 @@ public class Infiniteupgrades {
         }
     }
 
+    // ---------- Server lifecycle (force serverconfig to be created early) ----------
+
+    @SubscribeEvent
+    public void onServerAboutToStart(net.neoforged.neoforge.event.server.ServerAboutToStartEvent event) {
+        try {
+            // Forces the SERVER config to load and be written into <world>/serverconfig/
+            org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.snapshot();
+            LOGGER.info("[Infiniteupgrades] ServerAboutToStart: ensured server config is loaded/written");
+        } catch (Throwable t) {
+            LOGGER.error("[Infiniteupgrades] Failed to pre-load server config", t);
+        }
+    }
+
     @SubscribeEvent
     public void onServerStarting(net.neoforged.neoforge.event.server.ServerStartingEvent event) {
         LOGGER.info("[Infiniteupgrades] Server starting");
+        try {
+            // Harmless if called twice; guarantees presence even on odd loaders
+            org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.snapshot();
+        } catch (Throwable t) {
+            LOGGER.error("[Infiniteupgrades] Failed to load server config on start", t);
+        }
     }
 
     // ---- CLIENT ----
