@@ -4,84 +4,148 @@ package org.z2six.infiniteupgrades.feature.infusion.logic;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.DiggerItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.Items;
+import net.minecraft.tags.ItemTags;
 import org.slf4j.Logger;
 
+import java.util.Locale;
+
 /**
- * Utility for the custom "Block Speed +X%" stat.
+ * Utilities for our custom "Block Speed" stat:
  *
- * NBT schema (fractions, not percents):
- *   iu_upgrade {
- *     tool_speed_bonus: double   // fraction (e.g., 0.15 == +15%)
- *   }
+ * - Stored as a FRACTIONAL bonus (e.g., 0.15 == +15%) in item CustomData under key {@value #KEY_TOOL_SPEED_BONUS}.
+ * - Read/write helpers are null/empty-safe and never throw (they log and return safe defaults).
+ * - Mining tool detection uses vanilla item tags (PICKAXES/SHOVELS/AXES/HOES) with a DiggerItem fallback.
  *
- * This does NOT change mining speed yet; it only stores/reads the stat and
- * helps UI/tooltip code display it consistently.
+ * NOTE:
+ *   We intentionally keep this stat separate from vanilla Attribute system. The server applies per-upgrade steps
+ *   (and writes canonical history events) in UpgradeService. The value here is the authoritative effective bonus.
  */
 public final class ToolSpeedUtil {
     private static final Logger LOG = LogUtils.getLogger();
 
-    public static final String ROOT = "iu_upgrade";
-    public static final String KEY_TOOL_BONUS = "tool_speed_bonus"; // fraction
+    /** Top-level key inside the item's CustomData for our block speed fractional bonus. */
+    private static final String KEY_TOOL_SPEED_BONUS = "iu_tool_speed_bonus";
 
     private ToolSpeedUtil() {}
 
-    /** Detect vanilla & most modded tools: pickaxe/shovel/axe/hoe tags; fallback DiggerItem. */
-    public static boolean isMiningTool(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) return false;
+    // ------------------------------------------------------------------------------------------------------------
+    // Mining tool detection (no NeoForge ToolActions dependency)
+    // ------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Returns true if the stack should be treated as a mining tool for the purposes of our Block Speed stat.
+     * Uses vanilla tags for pickaxe/shovel/axe/hoe; falls back to instanceof DiggerItem (covers modded diggers).
+     */
+    public static boolean isMiningTool(ItemStack s) {
+        if (s == null || s.isEmpty()) return false;
         try {
-            if (stack.is(ItemTags.PICKAXES)) return true;
-            if (stack.is(ItemTags.SHOVELS))  return true;
-            if (stack.is(ItemTags.AXES))     return true;
-            if (stack.is(ItemTags.HOES))     return true;
-            return stack.getItem() instanceof DiggerItem;
+            // Quick explicit checks first (fast-path)
+            if (s.is(ItemTags.PICKAXES)) return true;
+            if (s.is(ItemTags.SHOVELS))  return true;
+            if (s.is(ItemTags.AXES))     return true;
+            if (s.is(ItemTags.HOES))     return true;
+
+            // Fallback: broad digger family (includes many modded tools)
+            return s.getItem() instanceof DiggerItem;
         } catch (Throwable t) {
-            LOG.error("[ToolSpeedUtil] isMiningTool failed: {}", t.toString());
+            // Never crash the UI / server tick due to tag/mapping oddities; just log once per odd case at info level.
+            LOG.info("[ToolSpeedUtil] isMiningTool failed for {}: {}", safeItemName(s), t.toString());
             return false;
         }
     }
 
-    /** Read fraction (0.15 == +15%). Returns 0.0 if missing or invalid. */
+    // ------------------------------------------------------------------------------------------------------------
+    // Bonus read/write (+ helpers)
+    // ------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Read the current Block Speed FRACTION (e.g., 0.15 == +15%). Missing key returns 0.0.
+     */
     public static double getBonus(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return 0.0;
         try {
             CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
             if (cd == null) return 0.0;
-            CompoundTag up = cd.copyTag().getCompound(ROOT);
-            if (!up.contains(KEY_TOOL_BONUS)) return 0.0;
-            return up.getDouble(KEY_TOOL_BONUS);
+            CompoundTag root = cd.copyTag();
+            if (!root.contains(KEY_TOOL_SPEED_BONUS)) return 0.0;
+            double v = root.getDouble(KEY_TOOL_SPEED_BONUS);
+            if (Double.isNaN(v) || Double.isInfinite(v)) return 0.0;
+            return v;
         } catch (Throwable t) {
-            LOG.error("[ToolSpeedUtil] getBonus failed: {}", t.toString());
+            LOG.error("[ToolSpeedUtil] getBonus failed for {}: {}", safeItemName(stack), t.toString());
             return 0.0;
         }
     }
 
-    /** Write fraction (0.15 == +15%). Non-destructive to other iu_upgrade keys. */
+    /**
+     * Write the Block Speed FRACTION (e.g., 0.15 == +15%) into the item.
+     * Negative values are clamped to 0.0. Very large values are clamped to a sane upper bound.
+     *
+     * NOTE: This mutates the provided ItemStack (copy before calling if you need a non-destructive preview).
+     */
     public static void setBonus(ItemStack stack, double fraction) {
         if (stack == null || stack.isEmpty()) return;
         try {
-            double v = Double.isFinite(fraction) ? fraction : 0.0;
+            double v = sanitizeFraction(fraction);
+
             CustomData cd = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
             CustomData updated = cd.update(tag -> {
-                CompoundTag up = tag.getCompound(ROOT);
-                up.putDouble(KEY_TOOL_BONUS, v);
-                tag.put(ROOT, up);
+                // Keep the value top-level (consistent with our other preview keys), not inside iu_upgrade.
+                tag.putDouble(KEY_TOOL_SPEED_BONUS, v);
             });
             stack.set(DataComponents.CUSTOM_DATA, updated);
+
+            LOG.debug("[ToolSpeedUtil] setBonus {} -> {}", safeItemName(stack), fmtPct(v));
         } catch (Throwable t) {
-            LOG.error("[ToolSpeedUtil] setBonus failed: {}", t.toString());
+            LOG.error("[ToolSpeedUtil] setBonus failed for {}: {}", safeItemName(stack), t.toString());
         }
     }
 
-    /** Format UI percent string WITHOUT sign; the caller adds '+' if desired. */
+    /** Format helper: 0.15 -> "15%" (no sign). */
     public static String formatPercentNoSign(double fraction) {
-        // 0.15 -> "15%"
-        double pct = fraction * 100.0;
-        String s = String.format(java.util.Locale.ROOT, "%.1f", pct);
-        if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
-        return s + "%";
+        try {
+            double v = Math.max(0.0, fraction) * 100.0;
+            // Round to one decimal if needed; avoid allocations for common integers
+            if (Math.abs(v - Math.rint(v)) < 1e-9) {
+                return String.format(Locale.ROOT, "%.0f%%", v);
+            }
+            return String.format(Locale.ROOT, "%.1f%%", v);
+        } catch (Throwable ignored) {
+            return "0%";
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // Internals
+    // ------------------------------------------------------------------------------------------------------------
+
+    private static double sanitizeFraction(double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return 0.0;
+        // Clamp to [0, 1000%] as a very generous upper bound to avoid runaway values.
+        if (v < 0.0) v = 0.0;
+        if (v > 10.0) v = 10.0;
+        return v;
+    }
+
+    private static String fmtPct(double fraction) {
+        return String.format(Locale.ROOT, "%.3f (=%s)", fraction, formatPercentNoSign(fraction));
+    }
+
+    private static String safeItemName(ItemStack s) {
+        try {
+            if (s.isEmpty()) return "<empty>";
+            // Prefer stable registry name, else fallback to class
+            var key = s.getItemHolder().unwrapKey();
+            if (key.isPresent()) return key.get().location().toString();
+            // Literal fallback if above fails
+            if (s.getItem() == Items.AIR) return "minecraft:air";
+            return s.getItem().getClass().getSimpleName();
+        } catch (Throwable ignored) {
+            return "<item>";
+        }
     }
 }

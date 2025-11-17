@@ -24,7 +24,6 @@ import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.ChanceModelType;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.Snapshot;
-import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 
 import java.util.*;
 
@@ -40,6 +39,10 @@ import java.util.*;
  * Backwards-compat:
  * - We keep using "iu_upgrade" and its "history" tag name, but the entries are canonicalized.
  * - "totals" has the same shape this UI already reads: { sumPercent (fraction), count (net), lastPercent (fraction) }.
+ *
+ * NEW:
+ * - Per-stat FINAL MULTIPLIERS (from TuningConfigSpec.finalMultipliers) are applied **at the very end of step math**,
+ *   both for vanilla attributes and for the custom Block Speed stat. History stores the *applied* (post-multiplier) step.
  */
 public final class UpgradeService {
     private static final Logger LOG = LogUtils.getLogger();
@@ -214,6 +217,10 @@ public final class UpgradeService {
                 // Custom per-level step for block speed comes from your percentBonusForLevelUp model
                 double baseStep = snap.percentBonusForLevelUp(currentLevel); // fraction
                 double step = Math.max(0.0, baseStep) * Math.max(0.0, ritualMult);
+
+                // >>> FINAL MULTIPLIER (Block Speed) <<<
+                step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+
                 if (step <= 0.0) continue;
 
                 // Apply to the item NBT (authoritative stat)
@@ -221,8 +228,8 @@ public final class UpgradeService {
                     double cur = ToolSpeedUtil.getBonus(copy);
                     double next = cur + step;
                     ToolSpeedUtil.setBonus(copy, next);
-                    LOG.info("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={}",
-                            ritual, fmt(cur), fmt(next), fmt(step));
+                    LOG.info("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={} (finalMult={})",
+                            ritual, fmt(cur), fmt(next), fmt(step), fmt(snap.finalMultiplier(BLOCK_SPEED_ID)));
                 } catch (Throwable t) {
                     LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());
                 }
@@ -238,6 +245,10 @@ public final class UpgradeService {
 
             double baseStep = rule.perLevelOverrides.getOrDefault(currentLevel, rule.defaultStep);
             double step = Math.max(0.0, baseStep) * Math.max(0.0, ritualMult);
+
+            // >>> FINAL MULTIPLIER (per-attribute) <<<
+            step *= Math.max(0.0, snap.finalMultiplier(id));
+
             if (step <= 0.0) continue;
 
             double signed = (rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step;
@@ -427,7 +438,7 @@ public final class UpgradeService {
                 ev.putDouble(H_OLD, 0.0); // optional (not used)
                 ev.putDouble(H_DELTA, 0.0);
                 ev.putDouble(H_NEW, 0.0);
-                ev.putDouble(H_STEP_P, s.signedPercent); // canonical signed fraction
+                ev.putDouble(H_STEP_P, s.signedPercent); // canonical signed fraction (already post-final-multiplier)
                 ev.putString(H_RULE, s.ruleId);
                 ev.putInt(H_LBEF, levelBefore);
                 ev.putInt(H_LAFT, levelAfter);

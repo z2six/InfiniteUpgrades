@@ -366,44 +366,80 @@ public final class DetailsPanelView {
 
     @org.jetbrains.annotations.Nullable
     private Double uniqueRuleStepForThisItem(ItemStack s, RitualType ritual) {
+        // Return a single per-upgrade step (fraction) only if ALL touched stats
+        // share the same final step after:
+        //   - per-level override/default
+        //   - ritual multiplier
+        //   - FINAL MULTIPLIER (per-attribute map, + Block Speed synthetic id)
+        //
+        // Otherwise, return null so the UI shows "varies by attribute".
         if (s == null || s.isEmpty()) return null;
 
-        // Which attributes are actually present on the item?
-        Set<ResourceLocation> present = new java.util.LinkedHashSet<>();
+        // Build the candidate set (rule-backed present attributes + Block Speed if applicable)
+        Set<ResourceLocation> presentAttrs = new java.util.LinkedHashSet<>();
         try {
             ItemAttributeModifiers cur = s.getAttributeModifiers();
             for (Entry e : cur.modifiers()) {
                 var id = idOf(e.attribute());
-                if (id != null) present.add(id);
+                if (id != null) presentAttrs.add(id);
             }
             ItemAttributeModifiers def = s.getItem().getDefaultAttributeModifiers(s);
             for (Entry e : def.modifiers()) {
                 var id = idOf(e.attribute());
-                if (id != null) present.add(id);
+                if (id != null) presentAttrs.add(id);
             }
         } catch (Throwable ignored) {}
 
         var snap = UpgradeServerConfig.snapshot();
         int level = parsePlusLevel(s);
-        double mult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
+        double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
 
-        Double unique = null;
-        for (var rule : snap.attributes) {
-            if (!rule.enabled) continue;
-            if (!present.contains(rule.id)) continue;
+        // Build the working list of candidates (only those with rules enabled)
+        List<Double> steps = new ArrayList<>();
+        try {
+            for (var rule : snap.attributes) {
+                if (!rule.enabled) continue;
+                if (!presentAttrs.contains(rule.id)) continue;
 
-            double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
-            double step = Math.max(0.0, base) * Math.max(0.0, mult);
-            if (step <= 0.0) continue;
+                // Base step for this attribute (fraction)…
+                double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
+                double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-            if (unique == null) {
-                unique = step;
-            } else if (Math.abs(step - unique) > 1.0e-9) {
-                // Different per-attr steps -> no single "unique" value
+                // Apply FINAL MULTIPLIER (server-side per-stat knob)
+                step *= Math.max(0.0, snap.finalMultiplier(rule.id));
+
+                // Ignore non-positive results
+                if (step > 0.0) steps.add(step);
+            }
+
+            // If the item is a mining tool, also include Block Speed as a candidate
+            if (ToolSpeedUtil.isMiningTool(s)) {
+                // Per-level global step model for Block Speed (same base model you show elsewhere)
+                double base = snap.percentBonusForLevelUp(level); // fraction
+                double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
+
+                // Apply FINAL MULTIPLIER for Block Speed
+                ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
+                step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+
+                if (step > 0.0) steps.add(step);
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] uniqueRuleStepForThisItem: failed computing steps: {}", t.toString());
+            return null;
+        }
+
+        // If nothing eligible, no unique value
+        if (steps.isEmpty()) return null;
+
+        // If all steps are (near-)identical, return that value; else null
+        Double first = steps.get(0);
+        for (int i = 1; i < steps.size(); i++) {
+            if (Math.abs(steps.get(i) - first) > 1.0e-9) {
                 return null;
             }
         }
-        return unique; // could be null if nothing matched
+        return first;
     }
 
     private void buildRecentHistory(ItemStack s, int width) {
@@ -453,31 +489,49 @@ public final class DetailsPanelView {
         double ritualMult = ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult;
 
         int shown = 0;
+
+        // Vanilla attributes that are present and rule-managed
         for (var rule : snap.attributes) {
             if (!rule.enabled) continue;
-            if (!present.contains(rule.id)) continue; // filter to attributes actually on the item
+            if (!present.contains(rule.id)) continue;
+
+            // Base step
             double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
             double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
+
+            // Apply FINAL MULTIPLIER from server config
+            double finalMult = Math.max(0.0, snap.finalMultiplier(rule.id));
+            step *= finalMult;
+
             if (step <= 0.0) continue;
 
             String display = resolveAttrDisplayName(rule.id.toString());
             String dir = rule.direction == UpgradeServerConfig.Direction.INCREASE ? "+" : "−";
+
+            // Example: "▸ Attack Damage  (+7.5% per upgrade)"
+            // We keep the line simple, since history/totals already store post-multiplier values.
             String line = BULLET + display + "  (" + dir + PCT1.format(step * 100.0) + "% per upgrade)";
             addWrapped(line, ChatFormatting.WHITE, width);
             shown++;
         }
 
-        // NEW: also surface the custom Block Speed stat for mining tools
+        // Custom Block Speed (if mining tool)
         try {
             if (ToolSpeedUtil.isMiningTool(s)) {
-                double perLevel = snap.percentBonusForLevelUp(level); // fraction
-                double step = Math.max(0.0, perLevel) * Math.max(0.0, ritualMult);
+                double base = snap.percentBonusForLevelUp(level); // fraction
+                double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
+
+                // FINAL MULTIPLIER for Block Speed
+                ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
+                double finalMult = Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+                step *= finalMult;
+
                 if (step > 0.0) {
                     String line = BULLET + "Block Speed  (+" + PCT1.format(step * 100.0) + "% per upgrade)";
                     addWrapped(line, ChatFormatting.WHITE, width);
                     shown++;
-                    LOG.debug("[DetailsPanelView] PossibleUpgrades: show Block Speed step={} (level={}, ritualMult={})",
-                            String.format(java.util.Locale.ROOT, "%.5f", step), level, ritualMult);
+                    LOG.debug("[DetailsPanelView] PossibleUpgrades: Block Speed step={} (level={}, ritualMult={}, finalMult={})",
+                            String.format(java.util.Locale.ROOT, "%.5f", step), level, ritualMult, finalMult);
                 }
             }
         } catch (Throwable t) {

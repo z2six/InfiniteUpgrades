@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/core/config/UpgradeServerConfig.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/core/config/UpgradeServerConfig.java
 package org.z2six.infiniteupgrades.core.config;
 
 import com.mojang.logging.LogUtils;
@@ -47,7 +47,7 @@ public final class UpgradeServerConfig {
     private static ReputationConfigSpec REPUTATION_SPEC;
     private static AttributesConfigSpec ATTR_SPEC;
     private static SoulsConfigSpec      SOULS_SPEC;
-    private static TuningConfigSpec     TUNING_SPEC;   // preview stepPercent + bonusSteps
+    private static TuningConfigSpec     TUNING_SPEC;   // base step + bonuses + FINAL MULTIPLIERS
 
     public static final ModConfigSpec SPEC;
 
@@ -128,8 +128,14 @@ public final class UpgradeServerConfig {
             this.tuning = tuning;
         }
 
+        /** Percent bonus for the upcoming level-up (L → L+1). */
         public double percentBonusForLevelUp(int currentLevel) {
             return tuning != null ? tuning.percentBonusForLevelUp(currentLevel) : 0.05;
+        }
+
+        /** NEW: convenience delegator to tuning.finalMultiplier(id). */
+        public double finalMultiplier(ResourceLocation id) {
+            return (tuning != null) ? tuning.finalMultiplier(id) : 1.0;
         }
     }
 
@@ -314,7 +320,7 @@ public final class UpgradeServerConfig {
                     new SoulsConfig(
                             true,
                             1.0,
-                            SoulsDropModel.HP_THRESHOLDS,
+                            org.z2six.infiniteupgrades.core.config.sections.SoulsDropModel.HP_THRESHOLDS,
                             0.75,
                             1,
                             30,
@@ -331,7 +337,8 @@ public final class UpgradeServerConfig {
                             1.0,       // fallback scale
                             Map.of()   // overrides
                     ),
-                    new TuningConfigSpec.Snapshot(0.05, Map.of())
+                    // Fallback tuning (includes no final multipliers; equivalent to all 1.0)
+                    new TuningConfigSpec.Snapshot(0.05, Map.of(), Map.of())
             );
         }
     }
