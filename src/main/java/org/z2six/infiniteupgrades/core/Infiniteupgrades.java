@@ -54,29 +54,6 @@ public class Infiniteupgrades {
     public static final net.neoforged.neoforge.registries.DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
             net.neoforged.neoforge.registries.DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
-    // --- Sigils (temporary plain Block; swap to SigilBlock when ready) ---
-    public static final net.neoforged.neoforge.registries.DeferredBlock<Block> CELESTIAL_SIGIL = BLOCKS.register(
-            "celestial_sigil",
-            () -> new Block(BlockBehaviour.Properties.of()
-                    .mapColor(MapColor.GOLD)
-                    .noCollission()
-                    .noOcclusion()
-                    .strength(0.1f)));
-
-    public static final net.neoforged.neoforge.registries.DeferredItem<BlockItem> CELESTIAL_SIGIL_ITEM =
-            ITEMS.registerSimpleBlockItem("celestial_sigil", CELESTIAL_SIGIL);
-
-    public static final net.neoforged.neoforge.registries.DeferredBlock<Block> UNHOLY_SIGIL = BLOCKS.register(
-            "unholy_sigil",
-            () -> new Block(BlockBehaviour.Properties.of()
-                    .mapColor(MapColor.NETHER)
-                    .noCollission()
-                    .noOcclusion()
-                    .strength(0.1f)));
-
-    public static final net.neoforged.neoforge.registries.DeferredItem<BlockItem> UNHOLY_SIGIL_ITEM =
-            ITEMS.registerSimpleBlockItem("unholy_sigil", UNHOLY_SIGIL);
-
     // --- Soul Cage item ---
     public static final net.neoforged.neoforge.registries.DeferredItem<Item> SOUL_CAGE = ITEMS.register("soul_cage",
             () -> new SoulCageItem(new Item.Properties().stacksTo(1)));
@@ -136,8 +113,6 @@ public class Infiniteupgrades {
                 // pass ItemLike, not the holder
                 event.accept(ModBlocks.ANGEL_STATUE_ITEM.get());
                 event.accept(ModBlocks.DEMON_STATUE_ITEM.get());
-                event.accept(CELESTIAL_SIGIL_ITEM.get());
-                event.accept(UNHOLY_SIGIL_ITEM.get());
             }
             if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
                 event.accept(SOUL_CAGE.get());
