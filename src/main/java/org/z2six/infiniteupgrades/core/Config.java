@@ -1,6 +1,7 @@
-// File: src/main/java/org/z2six/infiniteupgrades/core/Config.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/core/Config.java
 package org.z2six.infiniteupgrades.core;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
@@ -8,6 +9,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
+import org.slf4j.Logger;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -23,6 +25,8 @@ import java.util.stream.Collectors;
  */
 @EventBusSubscriber(modid = Infiniteupgrades.MODID)
 public class Config {
+
+    private static final Logger LOG = LogUtils.getLogger();
 
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
@@ -44,18 +48,21 @@ public class Config {
 
     static final ModConfigSpec SPEC = BUILDER.build();
 
-    public static boolean logDirtBlock;
-    public static int     magicNumber;
-    public static String  magicNumberIntroduction;
-    public static Set<Item> items;
+    public static boolean      logDirtBlock;
+    public static int          magicNumber;
+    public static String       magicNumberIntroduction;
+    public static Set<Item>    items;
 
     private static boolean validateItemName(final Object obj) {
         return obj instanceof String itemName
                 && BuiltInRegistries.ITEM.containsKey(ResourceLocation.parse(itemName));
     }
 
-    @SubscribeEvent
-    static void onLoad(final ModConfigEvent event) {
+    /**
+     * Internal helper that actually reads the COMMON config values into static fields.
+     * Called only when the config is known to be loaded (Loading/Reloading events for SPEC).
+     */
+    private static void bakeCommon() {
         try {
             logDirtBlock = LOG_DIRT_BLOCK.get();
             magicNumber = MAGIC_NUMBER.get();
@@ -64,8 +71,45 @@ public class Config {
                     .map(s -> BuiltInRegistries.ITEM.get(ResourceLocation.parse(s)))
                     .filter(Objects::nonNull)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
+
+            LOG.debug(
+                    "[InfiniteUpgrades/Config] COMMON config baked: logDirtBlock={}, magicNumber={}, intro='{}', items={}",
+                    logDirtBlock,
+                    magicNumber,
+                    magicNumberIntroduction,
+                    items.size()
+            );
         } catch (Throwable t) {
-            System.err.println("[InfiniteUpgrades/Config] Failed to load COMMON config safely: " + t);
+            // Defensive: never crash the game from here, just log and keep defaults.
+            LOG.error("[InfiniteUpgrades/Config] Failed to bake COMMON config safely", t);
         }
+    }
+
+    /**
+     * Fired when ANY config for this mod is first loaded.
+     * We filter by SPEC to ensure we only touch the COMMON config here.
+     */
+    @SubscribeEvent
+    static void onLoad(final ModConfigEvent.Loading event) {
+        if (event.getConfig().getSpec() != SPEC) {
+            // Not our COMMON config; ignore.
+            return;
+        }
+        LOG.debug("[InfiniteUpgrades/Config] ModConfigEvent.Loading received for COMMON config: {}", event.getConfig().getFileName());
+        bakeCommon();
+    }
+
+    /**
+     * Fired when ANY config for this mod is reloaded (e.g. via /reload or world reload).
+     * Again, only act for our COMMON config spec.
+     */
+    @SubscribeEvent
+    static void onReload(final ModConfigEvent.Reloading event) {
+        if (event.getConfig().getSpec() != SPEC) {
+            // Not our COMMON config; ignore.
+            return;
+        }
+        LOG.debug("[InfiniteUpgrades/Config] ModConfigEvent.Reloading received for COMMON config: {}", event.getConfig().getFileName());
+        bakeCommon();
     }
 }

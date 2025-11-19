@@ -4,13 +4,9 @@ package org.z2six.infiniteupgrades.core;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.state.BlockBehaviour;
-import net.minecraft.world.level.material.MapColor;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -22,10 +18,8 @@ import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import org.slf4j.Logger;
 
-import org.z2six.infiniteupgrades.core.bootstrap.client.StatueModelPatcher;
 import org.z2six.infiniteupgrades.core.config.UpgradeClientConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.registry.ModBlockEntities;
@@ -77,12 +71,6 @@ public class Infiniteupgrades {
 
         // Creative tabs
         modEventBus.addListener(this::addCreative);
-
-        // Client-only model hooks for Blockbench JSONs
-        if (FMLEnvironment.dist == Dist.CLIENT) {
-            modEventBus.addListener(StatueModelPatcher::onRegisterAdditional);
-            modEventBus.addListener(StatueModelPatcher::onModifyBaking);
-        }
 
         // GAME bus listeners
         NeoForge.EVENT_BUS.register(this);
