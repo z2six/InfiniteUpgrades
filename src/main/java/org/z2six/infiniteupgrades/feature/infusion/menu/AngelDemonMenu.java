@@ -3,9 +3,7 @@ package org.z2six.infiniteupgrades.feature.infusion.menu;
 
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
-import com.mojang.datafixers.util.Pair;
 import com.mojang.logging.LogUtils;
-import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
@@ -478,8 +476,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 return;
             }
 
-            Pair<Component, Integer> baseAndLevel = parseBaseNameAndLevel(in.getHoverName());
-            int currentLevel = baseAndLevel.getSecond();
+            // Use iu_upgrade.level as the authoritative level (fallback to name only if tag missing)
+            int currentLevel = readLevelFromTagOrName(in);
             int nextLevel = currentLevel + 1;
 
             UpgradeServerConfig.Snapshot snap = UpgradeServerConfig.snapshot();
@@ -512,10 +510,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             double factor = 1.0 + step;
 
             ItemStack preview = in.copy();
-            ChatFormatting lvlColor = UpgradeServerConfig.nameColorForLevel(nextLevel);
-            Component pretty = Component.literal(stripPlusSuffix(in.getHoverName().getString()))
-                    .append(Component.literal(" +" + nextLevel).withStyle(lvlColor));
-            preview.set(DataComponents.CUSTOM_NAME, pretty);
+
+            // NOTE: we no longer override CUSTOM_NAME for the preview; only stats are scaled.
 
             ItemAttributeModifiers cur = preview.getAttributeModifiers();
             ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
@@ -698,19 +694,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             if (s.getItem() instanceof DiggerItem) return "digger";
         } catch (Throwable ignored) {}
         return "tool";
-    }
-
-    private static Pair<Component, Integer> parseBaseNameAndLevel(Component name) {
-        try {
-            String s = name.getString();
-            Matcher m = PLUS_SUFFIX.matcher(s);
-            if (m.find()) {
-                int lvl = Mth.clamp(Integer.parseInt(m.group(1)), 0, 10000);
-                String base = s.substring(0, m.start());
-                return Pair.of(Component.literal(base), lvl);
-            }
-        } catch (Throwable ignored) {}
-        return Pair.of(name.copy(), 0);
     }
 
     private static String stripPlusSuffix(String s) {

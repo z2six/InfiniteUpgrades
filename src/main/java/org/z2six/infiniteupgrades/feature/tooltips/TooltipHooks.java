@@ -12,6 +12,7 @@ import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.TextColor;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
@@ -19,14 +20,15 @@ import net.minecraft.world.item.component.CustomData;
 import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 
 import java.text.DecimalFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-
-import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
+import java.util.regex.Pattern;
 
 /**
  * TooltipHooks – client-side tooltip augmentation for InfiniteUpgrades.
@@ -37,6 +39,9 @@ import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
  * Also emits a custom "Block Speed (+X%)" line for mining tools when the tool_speed_bonus stat is present.
  * The label uses a custom green (#00A800) and the numeric part in parentheses is aqua,
  * so preview obfuscation can target the number.
+ *
+ * Additionally, this class decorates the first tooltip line with a colored " +N"
+ * suffix based on iu_upgrade.level, without writing any CUSTOM_NAME to the item.
  */
 public final class TooltipHooks {
     private static final Logger LOG = LogUtils.getLogger();
@@ -50,6 +55,7 @@ public final class TooltipHooks {
     private static final String HISTORY_TAG      = "history";
     private static final String ATTR_KEY         = "attribute";
     private static final String STEP_PCT_KEY     = "stepPercent";
+    private static final String LEVEL_KEY        = "level";
 
     // Formatting
     private static final DecimalFormat PCT_FMT;
@@ -61,6 +67,9 @@ public final class TooltipHooks {
 
     // Custom colors
     private static final int BLOCK_SPEED_LABEL_RGB = 0x00A800; // #00a800
+
+    // Name suffix pattern: trailing " +<digits>"
+    private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
     private TooltipHooks() {}
 
@@ -81,7 +90,7 @@ public final class TooltipHooks {
                 pctByAttrId.putAll(aggregatePercentsFromHistory(stack));
             }
             if (pctByAttrId.isEmpty()) {
-                // keep going—custom "Block Speed" may still need to be appended
+                // keep going—custom "Block Speed" and "+N" name suffix may still need to be appended
             } else {
                 // 3) Resolve registry to map display names -> percents
                 final RegistryAccess access = resolveRegistryAccess(event);
@@ -147,6 +156,38 @@ public final class TooltipHooks {
                     tooltip.set(i, line.copy().append(Component.literal(" " + pctText).withStyle(color)));
                 }
             }
+
+            // 5) Append "+N" suffix to the *first* tooltip line based on iu_upgrade.level.
+            //    - Does NOT touch NBT name; purely visual.
+            //    - If the first line already ends with " +<digits>", we leave it alone (no double suffix).
+            try {
+                final int level = readLevelFromTagOrZero(stack);
+                if (level > 0 && tooltip != null && !tooltip.isEmpty()) {
+                    Component first = tooltip.get(0);
+                    String plainName = first.getString();
+
+                    // If it already ends with " +digits", don't append another.
+                    if (!PLUS_SUFFIX.matcher(plainName).find()) {
+                        int rgb = UpgradeServerConfig.resolveSuffixColor(level);
+                        ChatFormatting fallback = ChatFormatting.AQUA;
+
+                        MutableComponent suffix = Component.literal(" +" + level);
+                        if (rgb != 0) {
+                            suffix = suffix.withStyle(style -> style.withColor(rgb));
+                        } else {
+                            suffix = suffix.withStyle(fallback);
+                        }
+
+                        tooltip.set(0, first.copy().append(suffix));
+                        debug("Tooltip: appended level suffix +{} to first line", level);
+                    } else {
+                        debug("Tooltip: first line already has +N suffix, skipping IU suffix");
+                    }
+                }
+            } catch (Throwable t) {
+                debug("Tooltip: level suffix append failed: {}", t.toString());
+            }
+
         } catch (Throwable t) {
             LOG.error("[InfiniteUpgrades] Tooltip augmentation failed (defensive skip).", t);
         }
@@ -206,6 +247,45 @@ public final class TooltipHooks {
             }
         } catch (Throwable ignored) {}
         return out;
+    }
+
+    /**
+     * Read iu_upgrade.level if present; else fallback to parsing " +N" from the hover name.
+     * This mirrors the server-side helpers but stays client-only and read-only.
+     */
+    private static int readLevelFromTagOrZero(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return 0;
+        try {
+            if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                final CustomData cd = stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+                if (cd != CustomData.EMPTY) {
+                    final var root = cd.copyTag();
+                    if (root.contains(ROOT_UPGRADE_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+                        final var up = root.getCompound(ROOT_UPGRADE_TAG);
+                        if (up.contains(LEVEL_KEY, net.minecraft.nbt.Tag.TAG_INT)) {
+                            int lvl = up.getInt(LEVEL_KEY);
+                            if (lvl > 0) {
+                                return Mth.clamp(lvl, 0, 100_000);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        // Fallback: parse "+N" at end of hover name (for legacy items that still have it baked in).
+        try {
+            String s = stack.getHoverName().getString();
+            var m = PLUS_SUFFIX.matcher(s);
+            if (m.find()) {
+                int lvl = Integer.parseInt(m.group(1));
+                return Mth.clamp(lvl, 0, 100_000);
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return 0;
     }
 
     @Nullable

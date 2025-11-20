@@ -2,14 +2,11 @@
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.ChatFormatting;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
-import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
@@ -268,9 +265,7 @@ public final class UpgradeService {
         List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
         copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
 
-        // Commit name suffix
-        applyColoredSuffix(copy, newLevel);
-
+        // NOTE: we no longer touch CUSTOM_NAME here; the item name is owned by other systems (e.g. Apotheosis).
         return new Result(copy, true, newLevel);
     }
 
@@ -335,7 +330,7 @@ public final class UpgradeService {
                         ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
                     }
 
-                    applyColoredSuffix(copy, newLevel);
+                    // Level is already updated by appendStepsAndUpdateTotals; we no longer rewrite CUSTOM_NAME.
                     return copy;
                 }
             }
@@ -375,13 +370,12 @@ public final class UpgradeService {
                         ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
                     }
 
-                    applyColoredSuffix(copy, newLevel);
+                    // Level is already updated; no name rewrite.
                     return copy;
                 }
             }
 
-            // No steps to invert -> leave modifiers as-is, only clamp level
-            applyColoredSuffix(copy, newLevel);
+            // No steps to invert -> leave modifiers as-is, only clamp level in iu_upgrade
             setLevel(copy, newLevel);
             return copy;
         } catch (Throwable t) {
@@ -583,7 +577,7 @@ public final class UpgradeService {
         } catch (Throwable ignored) {}
         // fallback to name
         try {
-            Component name = stack.getHoverName();
+            var name = stack.getHoverName();
             String s = name.getString();
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\s+\\+(\\d+)$").matcher(s);
             if (m.find()) {
@@ -641,28 +635,6 @@ public final class UpgradeService {
                 && am.id().equals(bm.id())
                 && am.operation() == bm.operation()
                 && a.slot() == b.slot();
-    }
-
-    private static void applyColoredSuffix(ItemStack stack, int level) {
-        String base = stripPlusSuffix(stack.getHoverName().getString());
-
-        int rgb = UpgradeServerConfig.resolveSuffixColor(level);
-        ChatFormatting fallback = ChatFormatting.AQUA;
-
-        MutableComponent pretty = Component.literal(base);
-        MutableComponent suffix = Component.literal(" +" + level);
-
-        if (rgb != 0) suffix = suffix.withStyle(s -> s.withColor(rgb));
-        else suffix = suffix.withStyle(fallback);
-
-        pretty = pretty.append(suffix);
-        stack.set(DataComponents.CUSTOM_NAME, pretty);
-    }
-
-    private static String stripPlusSuffix(String s) {
-        var m = java.util.regex.Pattern.compile("\\s+\\+(\\d+)$").matcher(s);
-        if (m.find()) return s.substring(0, m.start());
-        return s;
     }
 
     private static String toId(Holder<Attribute> h) {
