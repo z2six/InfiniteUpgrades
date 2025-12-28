@@ -1,4 +1,5 @@
 // File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/SoulsConfigSpec.java
+// SoulsConfigSpec.java — server-authoritative soul drop + upgrade cost config (with permanent lifetime support)
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import net.minecraft.resources.ResourceLocation;
@@ -31,7 +32,7 @@ public final class SoulsConfigSpec {
     // HP_THRESHOLDS model knobs
     public final ModConfigSpec.ConfigValue<List<? extends String>> tierMinHeartsKV;
 
-    public final ModConfigSpec.IntValue     lifetimeSeconds;
+    public final ModConfigSpec.IntValue     lifetimeSeconds; // 0 = permanent (new behavior)
     public final ModConfigSpec.BooleanValue allowPvP;
     public final ModConfigSpec.ConfigValue<List<? extends String>> whitelistIds;
     public final ModConfigSpec.ConfigValue<List<? extends String>> blacklistIds;
@@ -99,8 +100,9 @@ public final class SoulsConfigSpec {
 
         // ---- Misc ----
         lifetimeSeconds   = B.comment(
-                "How long the orb lasts on the ground, in seconds."
-        ).defineInRange("lifetimeSeconds", 30, 1, 3_600);
+                "How long the orb lasts on the ground, in seconds.",
+                "Set to 0 to make soul orbs permanent (they never despawn)."
+        ).defineInRange("lifetimeSeconds", 30, 0, 3_600);
 
         allowPvP          = B.comment(
                 "If true, players can drop orbs when they die (PvP or other causes)."
@@ -114,16 +116,6 @@ public final class SoulsConfigSpec {
         blacklistIds      = B.comment(
                 "Entities that must NOT drop orbs (overrides whitelist if both are set)."
         ).defineListAllowEmpty("blacklistEntities", List.of(), o -> o instanceof String);
-
-        // ---- Optional light ----
-        spawnLights = B.comment(
-                "If true, spawn a small light where the soul orb appears (cosmetic)."
-        ).define("spawnLights", false);
-
-        lightRadiusBlocks = B.comment(
-                "Approximate radius of the placed light (in blocks).",
-                "0 = no light. The block light level is roughly radius+1 (max 15)."
-        ).defineInRange("lightRadiusBlocks", 3, 0, 14);
 
         // ---- Collection ----
         collectRangeBlocks = B.comment(
@@ -174,7 +166,7 @@ public final class SoulsConfigSpec {
 
         public final Map<String,Double>  tierMinHearts;
 
-        public final int     lifetimeSeconds;
+        public final int     lifetimeSeconds; // 0 = permanent
         public final boolean allowPvP;
         public final Set<ResourceLocation> whitelist;
         public final Set<ResourceLocation> blacklist;
@@ -263,7 +255,7 @@ public final class SoulsConfigSpec {
                 Math.max(0,   minUnitsForDrop.get()),
                 tu,
                 tmh,
-                Math.max(1,   lifetimeSeconds.get()),
+                Math.max(0,   lifetimeSeconds.get()), // allow 0 = permanent
                 allowPvP.get(),
                 parseIdSet(whitelistIds.get()),
                 parseIdSet(blacklistIds.get()),

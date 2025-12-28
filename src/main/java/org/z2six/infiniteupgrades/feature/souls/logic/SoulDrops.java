@@ -1,8 +1,8 @@
 // File: src/main/java/org/z2six/infiniteupgrades/feature/souls/logic/SoulDrops.java
+// SoulDrops.java — server-side drop logic with clumping (XP-Clumps-like) and robust logging
 package org.z2six.infiniteupgrades.feature.souls.logic;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -10,6 +10,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -22,7 +23,10 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Unchanged drop logic; added robust light registration using SoulLightService and light config control.
+ * Drop logic with:
+ *  - Tier selection (ratio or thresholds).
+ *  - Clumping within a small radius (~5 blocks) to massively reduce entity count under mob farms.
+ *  - Lifetime pulled from server-authoritative config (0 = permanent).
  */
 @EventBusSubscriber(modid = Infiniteupgrades.MODID)
 public final class SoulDrops {
@@ -33,6 +37,9 @@ public final class SoulDrops {
     private static final boolean LOG_SUCCESS   = true;
 
     private static final double RAND_H_RANGE = 0.40; // ±0.20 block
+
+    /** Clumping search radius in blocks (sphere-ish via AABB). */
+    private static final double CLUMP_RADIUS = 5.0;
 
     private static double hoverOffsetY(LivingEntity le) {
         double byHalf = Math.max(0.5, le.getBbHeight() * 0.5);
@@ -101,7 +108,7 @@ public final class SoulDrops {
                 return;
             }
 
-            int lifetimeTicks = Math.max(1, cfg.lifetimeSeconds) * 20;
+            int lifetimeTicks = Math.max(0, cfg.lifetimeSeconds) * 20; // 0 => permanent
 
             // Position: around victim's feet + safe hover offset
             Vec3 anchor = victim.position();
@@ -110,24 +117,52 @@ public final class SoulDrops {
             double y = anchor.y + hoverOffsetY(victim);
             Vec3 at = new Vec3(anchor.x + dx, y, anchor.z + dz);
 
-            // Log spawn decision
+            // Units for the newly generated soul (before clumping)
+            int newUnits = tierUnitsValue(cfg, tier);
+
+            // -------- CLUMPING: combine with any nearby soul entities within CLUMP_RADIUS ----------
+            int combinedUnits = newUnits;
+            int absorbed = 0;
+
+            if (lvl instanceof ServerLevel sl) {
+                AABB box = new AABB(
+                        at.x - CLUMP_RADIUS, at.y - CLUMP_RADIUS, at.z - CLUMP_RADIUS,
+                        at.x + CLUMP_RADIUS, at.y + CLUMP_RADIUS, at.z + CLUMP_RADIUS
+                );
+
+                for (SoulOrbEntity other : sl.getEntitiesOfClass(SoulOrbEntity.class, box)) {
+                    // (Optional small distance check to be stricter than the AABB corners)
+                    double dist2 = other.position().distanceToSqr(at);
+                    if (dist2 <= (CLUMP_RADIUS * CLUMP_RADIUS)) {
+                        combinedUnits += Math.max(0, other.getStoredUnits());
+                        other.discard();
+                        absorbed++;
+                    }
+                }
+            }
+
+            // Decide visual tier for the combined units using current tier-unit thresholds
+            SoulOrbEntity.Tier combinedTier = selectTierByUnits(cfg, combinedUnits);
+
             if (LOG_SUCCESS) {
-                LOG.info("[SoulDrops] SPAWN: dim={}, entityId={}, entityType={}, tier={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
-                        dim, victim.getId(), entId, tier, lifetimeTicks,
+                LOG.info("[SoulDrops] SPAWN(clumped): dim={}, entityId={}, entityType={}, baseTier={}, newUnits={}, absorbedOrbs={}, combinedUnits={}, combinedTier={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
+                        dim, victim.getId(), entId, tier, newUnits, absorbed, combinedUnits, combinedTier, lifetimeTicks,
                         fmt(at.x), fmt(at.y), fmt(at.z),
                         fmt(anchor.x), fmt(anchor.y), fmt(anchor.z),
                         fmt(dx), fmt(dz));
             }
 
-            // Spawn the orb
-            var orb = new SoulOrbEntity(lvl, at, tier, lifetimeTicks);
+            // Spawn the combined orb
+            var orb = new SoulOrbEntity(lvl, at, combinedTier, lifetimeTicks);
             orb.setHoverBaseY(y);
+            orb.setStoredUnits(combinedUnits); // critical: store total units for collection credit
             lvl.addFreshEntity(orb);
 
             // Visibility ping: small sparkle cluster at spawn
             if (lvl instanceof ServerLevel sl) {
                 sl.sendParticles(ParticleTypes.END_ROD, at.x, at.y, at.z, 12, 0.05, 0.05, 0.05, 0.02);
             }
+
         } catch (Throwable t) {
             LOG.error("[SoulDrops] onLivingDrops failed: {}", t.toString());
         }
@@ -203,6 +238,40 @@ public final class SoulDrops {
             }
         }
         return null;
+    }
+
+    /** Value in units for a visual tier, based on current config's thresholds (with sensible defaults). */
+    private static int tierUnitsValue(UpgradeServerConfig.SoulsConfig cfg, SoulOrbEntity.Tier tier) {
+        return switch (tier) {
+            case SMALL       -> cfg.tierUnitsOrDefault("SMALL", 1);
+            case MEDIUM      -> cfg.tierUnitsOrDefault("MEDIUM", 4);
+            case LARGE       -> cfg.tierUnitsOrDefault("LARGE", 8);
+            case EXTRA_LARGE -> cfg.tierUnitsOrDefault("EXTRA_LARGE", 16);
+        };
+    }
+
+    /** Choose the display tier for a given combined unit count, using the tierUnits thresholds. */
+    private static SoulOrbEntity.Tier selectTierByUnits(UpgradeServerConfig.SoulsConfig cfg, int units) {
+        SoulOrbEntity.Tier best = SoulOrbEntity.Tier.SMALL;
+        int bestVal = -1;
+        for (Map.Entry<String,Integer> e : cfg.tierUnits.entrySet()) {
+            SoulOrbEntity.Tier t = parseTier(e.getKey());
+            if (t == null) continue;
+            int val = Math.max(0, e.getValue());
+            if (val <= units && val >= bestVal) {
+                if (val > bestVal || order(t) > order(best)) {
+                    bestVal = val; best = t;
+                }
+            }
+        }
+        if (bestVal < 0) {
+            // fallback ordering if map was empty
+            if (units >= 16) return SoulOrbEntity.Tier.EXTRA_LARGE;
+            if (units >= 8)  return SoulOrbEntity.Tier.LARGE;
+            if (units >= 4)  return SoulOrbEntity.Tier.MEDIUM;
+            return SoulOrbEntity.Tier.SMALL;
+        }
+        return best;
     }
 
     private static SoulOrbEntity.Tier parseTier(String name) {

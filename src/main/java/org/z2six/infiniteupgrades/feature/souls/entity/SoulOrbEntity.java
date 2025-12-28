@@ -1,4 +1,5 @@
 // File: src/main/java/org/z2six/infiniteupgrades/feature/souls/entity/SoulOrbEntity.java
+// SoulOrbEntity.java — souls that hover, home to cages, clump-friendly via storedUnits; supports permanent lifetime
 package org.z2six.infiniteupgrades.feature.souls.entity;
 
 import com.mojang.logging.LogUtils;
@@ -30,13 +31,14 @@ import java.util.UUID;
  *
  * Soul orbs that hover, can home into players carrying a Soul Cage, and credit the cage on pickup.
  *
+ * Now supports:
+ *  - Clumping: an orb carries an explicit "storedUnits" value so multiple drops can be combined losslessly.
+ *  - Permanent lifetime: if configured, orbs never despawn and never fade.
+ *
  * Smooth motion:
  *  - Uses velocity + move(MoverType.SELF, vel) instead of per-tick setPos teleports.
  *  - Idle hover steers toward a target Y with clamped velocity (no teleporting).
  *  - Homing accelerates over time via delta movement; movement is applied via move().
- *
- * Light lifecycle:
- *  - Static light is now cleaned up immediately when homing starts (rather than on collect only).
  */
 public class SoulOrbEntity extends Entity {
     private static final Logger LOG = LogUtils.getLogger();
@@ -51,7 +53,11 @@ public class SoulOrbEntity extends Entity {
     private static final EntityDataAccessor<Integer> DATA_TIER =
             SynchedEntityData.defineId(SoulOrbEntity.class, EntityDataSerializers.INT);
 
-    private int lifetime = 20 * 30; // 30 seconds
+    private static final EntityDataAccessor<Integer> DATA_UNITS =
+            SynchedEntityData.defineId(SoulOrbEntity.class, EntityDataSerializers.INT);
+
+    /** 0 = permanent, >0 = despawn after N ticks. */
+    private int lifetime = 20 * 30; // default 30 seconds unless overridden on construction
 
     // Hover state
     private double hoverBaseY;           // y around which we bob
@@ -59,7 +65,7 @@ public class SoulOrbEntity extends Entity {
     private float hoverSpeed = 0.08f;    // radians/tick
     private float hoverAmplitude = 0.08f;// blocks
 
-    // Light cleanup bookkeeping
+    // Light cleanup bookkeeping (currently not placing lights; left for compatibility)
     private BlockPos lightAnchor;
     private boolean lightCleared = false;
 
@@ -90,16 +96,26 @@ public class SoulOrbEntity extends Entity {
         this(ModEntityTypes.SOUL_ORB.get(), level);
         this.moveTo(pos.x, pos.y, pos.z, 0.0f, 0.0f);
         this.setTier(tier);
-        this.lifetime = Math.max(1, lifetimeTicks);
+        this.lifetime = Math.max(0, lifetimeTicks); // 0 = permanent
         this.setDeltaMovement(Vec3.ZERO);
         this.hoverBaseY = pos.y;
         this.hoverPhaseOffset = level.random.nextFloat() * (float)(Math.PI * 2.0);
         this.refreshDimensions();
 
+        // default units to tier's unit value (caller may override to a combined/clumped total)
+        var snap = UpgradeServerConfig.snapshot();
+        int defaultUnits = switch (tier) {
+            case SMALL       -> snap.souls.tierUnitsOrDefault("SMALL", 1);
+            case MEDIUM      -> snap.souls.tierUnitsOrDefault("MEDIUM", 4);
+            case LARGE       -> snap.souls.tierUnitsOrDefault("LARGE", 8);
+            case EXTRA_LARGE -> snap.souls.tierUnitsOrDefault("EXTRA_LARGE", 16);
+        };
+        setStoredUnits(defaultUnits);
+
         if (LOG_SPAWN && !level.isClientSide) {
             var bb = this.getBoundingBox();
-            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
-                    this.getId(), tier, level.dimension().location(),
+            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, units={}, permanent={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
+                    this.getId(), tier, defaultUnits, (this.lifetime == 0), level.dimension().location(),
                     fmt(pos.x), fmt(pos.y), fmt(pos.z), lifetimeTicks,
                     fmt(bb.minX), fmt(bb.minY), fmt(bb.maxX), fmt(bb.maxY),
                     fmt(bb.getXsize()), fmt(bb.getYsize()));
@@ -111,12 +127,13 @@ public class SoulOrbEntity extends Entity {
     @Override
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(DATA_TIER, 0);
+        builder.define(DATA_UNITS, 0);
     }
 
     @Override
     protected void readAdditionalSaveData(CompoundTag tag) {
         if (tag.contains("Tier")) setTierOrdinal(Mth.clamp(tag.getInt("Tier"), 0, Tier.values().length - 1));
-        if (tag.contains("Life")) this.lifetime = Math.max(1, tag.getInt("Life"));
+        if (tag.contains("Life")) this.lifetime = Math.max(0, tag.getInt("Life")); // 0 = permanent
         if (tag.contains("HoverBaseY")) this.hoverBaseY = tag.getDouble("HoverBaseY");
         if (tag.contains("HoverSpeed")) this.hoverSpeed = tag.getFloat("HoverSpeed");
         if (tag.contains("HoverAmp"))   this.hoverAmplitude = tag.getFloat("HoverAmp");
@@ -129,6 +146,9 @@ public class SoulOrbEntity extends Entity {
         if (tag.contains("HomingTicks")) this.homingTicks = tag.getInt("HomingTicks");
         if (tag.contains("HomingTarget")) {
             try { this.homingTargetId = tag.getUUID("HomingTarget"); } catch (Throwable ignored) {}
+        }
+        if (tag.contains("Units")) {
+            setStoredUnits(Math.max(0, tag.getInt("Units")));
         }
         this.refreshDimensions();
     }
@@ -145,6 +165,7 @@ public class SoulOrbEntity extends Entity {
         if (this.homing) tag.putBoolean("Homing", true);
         if (this.homingTicks > 0) tag.putInt("HomingTicks", this.homingTicks);
         if (this.homingTargetId != null) tag.putUUID("HomingTarget", this.homingTargetId);
+        tag.putInt("Units", getStoredUnits());
     }
 
     @Override
@@ -152,12 +173,20 @@ public class SoulOrbEntity extends Entity {
         super.tick();
 
         if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
-            LOG.info("[SoulOrbEntity] tick: id={}, pos=({},{},{}), dim={}, lifeLeft={}t, homing={}",
-                    this.getId(), fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
-                    this.level().dimension().location(), (this.lifetime - this.tickCount), homing);
+            LOG.info("[SoulOrbEntity] tick: id={}, tier={}, units={}, pos=({},{},{}), dim={}, lifeLeft={}t, permanent={}, homing={}",
+                    this.getId(), getTier(), getStoredUnits(),
+                    fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
+                    this.level().dimension().location(),
+                    (this.lifetime == 0 ? -1 : Math.max(0, this.lifetime - this.tickCount)),
+                    (this.lifetime == 0), homing);
         }
 
         if (!level().isClientSide) {
+            // Despawn if lifetime reached (unless permanent)
+            if (this.lifetime > 0 && this.tickCount >= this.lifetime) {
+                this.discard();
+                return;
+            }
             serverMotionAndCollection();
         }
         // CLIENT: vanilla interpolates to server positions/motion
@@ -244,20 +273,12 @@ public class SoulOrbEntity extends Entity {
 
     private void onCollectedBy(Player player) {
         // Add units to the player's first Soul Cage stack
-        var snap = UpgradeServerConfig.snapshot();
-        int units = switch (getTier()) {
-            case SMALL       -> snap.souls.tierUnitsOrDefault("SMALL", 1);
-            case MEDIUM      -> snap.souls.tierUnitsOrDefault("MEDIUM", 4);
-            case LARGE       -> snap.souls.tierUnitsOrDefault("LARGE", 8);
-            case EXTRA_LARGE -> snap.souls.tierUnitsOrDefault("EXTRA_LARGE", 16);
-        };
-
         var stack = SoulCageItem.findAnyCage(player);
         if (!stack.isEmpty()) {
-            int after = SoulCageItem.addUnits(stack, units);
+            int after = SoulCageItem.addUnits(stack, Math.max(0, getStoredUnits()));
             if (LOG_SPAWN) {
                 LOG.info("[SoulOrbEntity] collected: player={}, units={}, tier={}, newTotal={}",
-                        player.getScoreboardName(), units, getTier(), after);
+                        player.getScoreboardName(), getStoredUnits(), getTier(), after);
             }
         } else {
             if (LOG_SPAWN) {
@@ -265,7 +286,6 @@ public class SoulOrbEntity extends Entity {
             }
         }
 
-        // Light is already removed when homing started; ensure idempotency
         this.discard();
     }
 
@@ -300,8 +320,10 @@ public class SoulOrbEntity extends Entity {
     /**
      * Used by the renderer to fade the soul out during the last N ticks of its life.
      * Returns a factor in [0..1], where 1 = fully visible, 0 = fully faded.
+     * If lifetime is 0 (permanent), always returns 1.
      */
     public float fadeFactor(float partialTick, int fadeWindowTicks) {
+        if (this.lifetime == 0) return 1.0f; // permanent → never fade
         if (fadeWindowTicks <= 0) return 1.0f;
         float remaining = (this.lifetime - this.tickCount) - partialTick;
         if (remaining <= 0f) return 0f;
@@ -318,7 +340,11 @@ public class SoulOrbEntity extends Entity {
     private int getTierOrdinal() { return this.entityData.get(DATA_TIER); }
     private void setTierOrdinal(int ord) { this.entityData.set(DATA_TIER, ord); }
 
-    // ---- Light lifecycle glue ----------------------------------------------------
+    // Units sync (for clumping and accurate crediting)
+    public int getStoredUnits() { return this.entityData.get(DATA_UNITS); }
+    public void setStoredUnits(int units) { this.entityData.set(DATA_UNITS, Math.max(0, units)); }
+
+    // ---- Light lifecycle glue (reserved) ----------------------------------------------------
 
     /** Spawner should call this once it knows the final BlockPos used for the light. */
     public void setLightAnchor(BlockPos pos) {
