@@ -606,7 +606,7 @@ public final class DetailsPanelView {
         }
 
         addWrapped(line, color, width);
-    }
+    } // a
 
     private int getUpgradeLevelClientSafe(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return 0;
