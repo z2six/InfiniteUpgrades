@@ -8,7 +8,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.chat.Component;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.Container;
@@ -19,6 +18,8 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ContainerData;
+import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.*;
 import net.minecraft.world.item.component.CustomData;
@@ -43,18 +44,9 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Angel/Demon menu (server-authoritative).
- * - Server ctor variants load persisted slots.
- * - Buf-ctor reads ritual & anchor from the buffer; client sees correct context.
- *
- * Change: allow mining tools (pickaxe/shovel/axe/hoe) in input slot alongside combat gear.
- *         Also log when a mining tool is accepted into the input slot.
- */
 public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final Logger LOG = LogUtils.getLogger();
 
-    // ---------------- Slot coordinates ----------------
     public static final int INPUT1_X = 63;
     public static final int INPUT1_Y = 37;
     public static final int INPUT2_X = 99;
@@ -68,7 +60,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private static final int HOTBAR_X = 9;
     private static final int HOTBAR_Y = 199;
 
-    /** Button id used by the client when calling handleInventoryButtonClick. */
     public static final int BUTTON_INFUSE = 0;
 
     private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
@@ -80,7 +71,16 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     );
     private static final Pattern PLUS_SUFFIX = Pattern.compile("\\s+\\+(\\d+)$");
 
-    // Inventory for the 3 ritual slots (0=input,1=resource,2=output)
+    // ====== Server-authoritative soul cost sync (via vanilla ContainerData) ======
+    // data[0] = known (0/1)
+    // data[1] = cost (>=0)
+    // data[2] = level that the server computed cost against (>=0)
+    private static final int DATA_SOUL_KNOWN = 0;
+    private static final int DATA_SOUL_COST  = 1;
+    private static final int DATA_SOUL_LEVEL = 2;
+
+    private final ContainerData synced = new SimpleContainerData(3);
+
     private final Container baseInv = new SimpleContainer(3) {
         @Override public void setChanged() {
             super.setChanged();
@@ -97,20 +97,14 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private BlockPos anchorPos = BlockPos.ZERO;
     private final Player owner;
 
-    // --------------- Client lock snapshot (read by screen/MainGuiView) ---------------
     private long clientLockEndGameTime   = 0L; // 0 => no lock
     private int  clientLockDurationTicks = 0;
 
-    // Optional: early outcome (cosmetic)
     private boolean clientOutcomeKnown = false;
     private boolean clientWillSucceed  = false;
 
-    // Per-menu extra salt for RNG
     private long menuAttemptCounter = 0L;
 
-    // ---------------- ctors ----------------
-
-    /** Minimal ctor: builds slots; default ritual ANGEL. Server loads persisted slots. */
     public AngelDemonMenu(int id, Inventory inv) {
         super(ModMenus.ANGEL_MENU.get(), id);
         this.owner = inv.player;
@@ -118,6 +112,10 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         this.anchorPos = BlockPos.ZERO;
 
         buildSlots(inv);
+        this.addDataSlots(synced);
+
+        // Start unknown until server computes it.
+        clientSetSoulCostUnknown("ctor(base)");
 
         if (this.owner != null && !this.owner.level().isClientSide) {
             try {
@@ -127,9 +125,10 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 LOG.error("[AngelDemonMenu] (server base-ctor) failed to load persisted slots: {}", t.toString());
             }
         }
+
+        updatePreview();
     }
 
-    /** Server-side ctor with explicit ritual & anchor. */
     public AngelDemonMenu(int id, Inventory inv, RitualType ritual, BlockPos anchorPos) {
         super(ModMenus.ANGEL_MENU.get(), id);
         this.owner = inv.player;
@@ -137,6 +136,9 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         this.anchorPos = (anchorPos == null ? BlockPos.ZERO : anchorPos);
 
         buildSlots(inv);
+        this.addDataSlots(synced);
+
+        clientSetSoulCostUnknown("ctor(ritual)");
 
         if (this.owner != null && !this.owner.level().isClientSide) {
             try {
@@ -146,17 +148,20 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 LOG.error("[AngelDemonMenu] (server ritual-ctor) failed to load persisted slots: {}", t.toString());
             }
         }
+
+        updatePreview();
     }
 
-    /** Client-side ctor from network buffer. */
     public AngelDemonMenu(int id, Inventory inv, FriendlyByteBuf buf) {
         super(ModMenus.ANGEL_MENU.get(), id);
         this.owner = inv.player;
 
         buildSlots(inv);
+        this.addDataSlots(synced);
+
+        clientSetSoulCostUnknown("ctor(buf)");
 
         try {
-            // Read context written by StatueBlock (pos first, then ritual ordinal)
             this.anchorPos = buf.readBlockPos();
             int ord = 0;
             try { ord = buf.readVarInt(); } catch (Throwable ignored) {}
@@ -166,17 +171,16 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
             LOG.debug("[AngelDemonMenu] (buf-ctor) Context from buf: pos={} ritual={}", this.anchorPos, this.ritual);
 
-            // Client side: clear any stale client lock snapshot.
             clientClearServerLock();
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] Failed reading ritual context from buf: {}", t.toString());
             this.ritual = RitualType.ANGEL; // safe fallback
         }
+
+        updatePreview();
     }
 
-    // Shared slot layout
     private void buildSlots(Inventory inv) {
-        // Inputs
         this.addSlot(new Slot(baseInv, 0, INPUT1_X, INPUT1_Y) {
             @Override public boolean mayPlace(ItemStack stack) {
                 if (owner != null && !owner.level().isClientSide) {
@@ -184,7 +188,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 }
                 boolean ok = isUpgradeableItem(stack);
                 if (ok) {
-                    // Log accepted mining tools specifically (to latest.log)
                     if (isMiningTool(stack)) {
                         LOG.info("[AngelDemonMenu] Accepted mining tool in input: {} ({})",
                                 stack.getItem().toString(), describeToolClass(stack));
@@ -202,7 +205,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
         });
 
-        // Output
         this.addSlot(new Slot(baseInv, 2, OUTPUT_X, OUTPUT_Y) {
             @Override public boolean mayPlace(ItemStack stack) { return false; }
             @Override public boolean mayPickup(Player player) {
@@ -219,7 +221,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
         });
 
-        // Player inventory & hotbar
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 9; ++col) {
                 this.addSlot(new Slot(inv, col + row * 9 + 9,
@@ -232,11 +233,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     HOTBAR_X + col * SLOT_STEP,
                     HOTBAR_Y));
         }
-
-        updatePreview();
     }
-
-    // --------- Context setters (optional) ---------
 
     public void serverSetContext(RitualType ritual, BlockPos anchorPos) {
         if (this.owner != null && !this.owner.level().isClientSide) {
@@ -266,8 +263,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         updatePreview();
     }
 
-    // --------- Button handling (server-authoritative) ---------
-
     @Override
     public boolean clickMenuButton(Player player, int id) {
         if (id != BUTTON_INFUSE) {
@@ -283,8 +278,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         onInfuseButtonPressed(sp);
         return true;
     }
-
-    // --------- Client hooks (called by S2C handlers) ---------
 
     public long getClientLockEndGameTime()   { return clientLockEndGameTime; }
     public int  getClientLockDurationTicks() { return clientLockDurationTicks; }
@@ -317,7 +310,58 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     public boolean isClientOutcomeKnown() { return clientOutcomeKnown; }
     public boolean getClientWillSucceed() { return clientWillSucceed; }
 
-    // --------- Server: actual click handling & attempt start ---------
+    // ====== Soul cost getters (client reads these; server owns them) ======
+    public boolean isClientSoulCostKnown() {
+        try { return synced.get(DATA_SOUL_KNOWN) != 0; }
+        catch (Throwable t) { LOG.debug("[AngelDemonMenu] isClientSoulCostKnown read failed: {}", t.toString()); return false; }
+    }
+    public int getClientSoulCost() {
+        try { return Math.max(0, synced.get(DATA_SOUL_COST)); }
+        catch (Throwable t) { LOG.debug("[AngelDemonMenu] getClientSoulCost read failed: {}", t.toString()); return 0; }
+    }
+    public int getClientSoulCostLevel() {
+        try { return Math.max(0, synced.get(DATA_SOUL_LEVEL)); }
+        catch (Throwable t) { LOG.debug("[AngelDemonMenu] getClientSoulCostLevel read failed: {}", t.toString()); return 0; }
+    }
+
+    private void serverSetSoulCostKnown(int cost, int level, String reason) {
+        if (owner == null || owner.level().isClientSide) return;
+        int c = Math.max(0, cost);
+        int l = Math.max(0, level);
+        try {
+            synced.set(DATA_SOUL_KNOWN, 1);
+            synced.set(DATA_SOUL_COST, c);
+            synced.set(DATA_SOUL_LEVEL, l);
+            LOG.debug("[AngelDemonMenu] SoulCost SYNC set: known=1 cost={} level={} reason={}", c, l, reason);
+        } catch (Throwable t) {
+            LOG.error("[AngelDemonMenu] serverSetSoulCostKnown failed: {}", t.toString());
+        }
+    }
+
+    private void serverSetSoulCostUnknown(String reason) {
+        if (owner == null || owner.level().isClientSide) return;
+        try {
+            synced.set(DATA_SOUL_KNOWN, 0);
+            synced.set(DATA_SOUL_COST, 0);
+            synced.set(DATA_SOUL_LEVEL, 0);
+            LOG.debug("[AngelDemonMenu] SoulCost SYNC set: known=0 reason={}", reason);
+        } catch (Throwable t) {
+            LOG.error("[AngelDemonMenu] serverSetSoulCostUnknown failed: {}", t.toString());
+        }
+    }
+
+    private void clientSetSoulCostUnknown(String reason) {
+        // Client-side init only; server will overwrite via sync.
+        if (owner == null || !owner.level().isClientSide) return;
+        try {
+            synced.set(DATA_SOUL_KNOWN, 0);
+            synced.set(DATA_SOUL_COST, 0);
+            synced.set(DATA_SOUL_LEVEL, 0);
+            LOG.debug("[AngelDemonMenu] (client init) SoulCost cleared: reason={}", reason);
+        } catch (Throwable t) {
+            LOG.debug("[AngelDemonMenu] (client init) SoulCost clear failed: {}", t.toString());
+        }
+    }
 
     public void onInfuseButtonPressed(Player player) {
         try {
@@ -421,8 +465,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         }
     }
 
-    // --------- Lifecycle ---------
-
     @Override
     public void removed(Player player) {
         try { super.removed(player); } catch (Throwable t) { LOG.error("[AngelDemonMenu] super.removed threw: {}", t.toString()); }
@@ -446,10 +488,14 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         }
     }
 
-    // --------- Preview logic ---------
-
     private void updatePreview() {
         try {
+            // Server-authoritative soul cost: default to unknown unless we compute a valid cost.
+            if (owner != null && !owner.level().isClientSide) {
+                serverSetSoulCostUnknown("updatePreview(start)");
+            }
+
+            // Keep existing semantics: do not overwrite real results with previews.
             if (owner != null && !owner.level().isClientSide) {
                 if (hasRealResult()) return;
             }
@@ -461,6 +507,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                         baseInv.setItem(2, ItemStack.EMPTY);
                         previewChancePermille = 0;
                     });
+                    serverSetSoulCostUnknown("updatePreview(pending)");
                     return;
                 }
             }
@@ -473,13 +520,14 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
                 });
+                if (owner != null && !owner.level().isClientSide) {
+                    serverSetSoulCostUnknown("updatePreview(missing inputs)");
+                }
                 return;
             }
 
-            // Use iu_upgrade.level as the authoritative level (fallback to name only if tag missing)
             int currentLevel = readLevelFromTagOrName(in);
             int nextLevel = currentLevel + 1;
-
             UpgradeServerConfig.Snapshot snap = UpgradeServerConfig.snapshot();
             int maxLevel = snap.maxLevel;
             if (nextLevel > maxLevel) {
@@ -487,12 +535,23 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
                 });
+                if (owner != null && !owner.level().isClientSide) {
+                    serverSetSoulCostUnknown("updatePreview(max level)");
+                }
                 return;
             }
 
             int soulCost = 0;
             try { soulCost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel)); }
-            catch (Throwable t) { LOG.error("[AngelDemonMenu] updatePreview: getSoulCostForNextLevel failed: {}", t.toString()); soulCost = 0; }
+            catch (Throwable t) {
+                LOG.error("[AngelDemonMenu] updatePreview: getSoulCostForNextLevel failed: {}", t.toString());
+                soulCost = 0;
+            }
+
+            // ✅ Server authoritative: publish the computed cost + level to client.
+            if (owner != null && !owner.level().isClientSide) {
+                serverSetSoulCostKnown(soulCost, currentLevel, "updatePreview(valid)");
+            }
 
             int availableSouls = SoulCageItem.getTotal(res);
             if (availableSouls < soulCost) {
@@ -500,6 +559,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                     baseInv.setItem(2, ItemStack.EMPTY);
                     previewChancePermille = 0;
                 });
+                // cost is still known; UI can show "need X" vs "have Y"
                 return;
             }
 
@@ -510,8 +570,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             double factor = 1.0 + step;
 
             ItemStack preview = in.copy();
-
-            // NOTE: we no longer override CUSTOM_NAME for the preview; only stats are scaled.
 
             ItemAttributeModifiers cur = preview.getAttributeModifiers();
             ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
@@ -548,7 +606,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 if (isMiningTool(in)) {
                     double curBonus = ToolSpeedUtil.getBonus(in);       // fraction
                     double nextBonus = Math.max(0.0, curBonus + step);  // same per-level step you show elsewhere
-                    // Write into the PREVIEW copy only (iu_preview true below)
                     ToolSpeedUtil.setBonus(preview, nextBonus);
                     LOG.debug("[AngelDemonMenu] Preview tool_speed_bonus next={} (cur={} step={}) for {}",
                             String.format(java.util.Locale.ROOT, "%.5f", nextBonus),
@@ -574,10 +631,11 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 baseInv.setItem(2, ItemStack.EMPTY);
                 previewChancePermille = 0;
             });
+            if (owner != null && !owner.level().isClientSide) {
+                serverSetSoulCostUnknown("updatePreview(exception)");
+            }
         }
     }
-
-    // --------- Helpers ---------
 
     private void withPreviewSuppressed(Runnable r) {
         boolean prev = suppressPreviewUpdate;
@@ -595,7 +653,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         }
     }
 
-    /** After PendingStore.finalizeIfReady(), copy the attachment result into slot 2 and sync. (server-only) */
     public void serverPullResultFromAttachment() {
         if (owner == null || owner.level().isClientSide) return;
 
@@ -655,17 +712,14 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         return false;
     }
 
-    /** NEW: accept pickaxe/shovel/axe/hoe in addition to existing combat gear. */
     private static boolean isUpgradeableItem(ItemStack stack) {
         return isMiningTool(stack) || isCombatItemLegacy(stack);
     }
 
-    /** Tool detection via vanilla item tags, with a DiggerItem fallback. */
     private static boolean isMiningTool(ItemStack stack) {
         return ToolSpeedUtil.isMiningTool(stack);
     }
 
-    /** Keep the original combat acceptance logic as a separate helper. */
     private static boolean isCombatItemLegacy(ItemStack stack) {
         if (stack.isEmpty()) return false;
         try {
@@ -684,7 +738,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         return false;
     }
 
-    /** For readable logs when a tool is accepted. */
     private static String describeToolClass(ItemStack s) {
         try {
             if (s.is(ItemTags.PICKAXES)) return "pickaxe";
@@ -702,7 +755,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         return s;
     }
 
-    /** Authoritative level from iu_upgrade.level if present, else fallback to name suffix. */
     private static int readLevelFromTagOrName(ItemStack stack) {
         try {
             CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
@@ -722,8 +774,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         return 0;
     }
 
-    // ---- Attachment persistence (server) ----
-
     private void persistSlotsToAttachmentServer() {
         if (owner == null || owner.level().isClientSide) return;
         var type = (ritual == RitualType.ANGEL)
@@ -738,7 +788,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         LOG.debug("[AngelDemonMenu] Persisted ritual slots to attachment ({})", ritual);
     }
 
-    // --- Shift-click rules ---
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
         try {
@@ -746,7 +795,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             Slot slot = this.slots.get(index);
             if (slot == null || !slot.hasItem()) return empty;
 
-            // Output -> player inventory
             if (index == 2) {
                 if (!hasRealResult()) return ItemStack.EMPTY;
                 ItemStack stack = slot.getItem();
@@ -792,7 +840,6 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
         var type = (ritual == RitualType.ANGEL)
                 ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
                 : ModAttachments.DEMON_RITUAL_SLOTS.get();
-
         ModAttachments.RitualSlots saved = owner.getData(type);
         if (saved == null) {
             LOG.debug("[AngelDemonMenu] No saved slots in attachment for ritual={}", ritual);

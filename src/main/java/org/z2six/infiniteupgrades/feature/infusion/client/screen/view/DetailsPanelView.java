@@ -31,59 +31,51 @@ import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 import java.text.DecimalFormat;
 import java.util.*;
 
-/**
- * Details panel drawn to the right of the main panel.
- */
 public final class DetailsPanelView {
     private static final Logger LOG = LogUtils.getLogger();
+
+    // Tracks menu-synced soul cost state so we can rebuild rows when container data arrives.
+    private boolean lastSoulKnown = false;
+    private int lastSoulCost = Integer.MIN_VALUE;
+    private int lastSoulLevel = Integer.MIN_VALUE;
 
     public static final int DETAILS_W = 128;
     public static final int DETAILS_H = 222;
 
-    // 1px gap between main and details
     public static final int GAP_TO_MAIN = 1;
 
-    // Inner text box (relative to details origin)
     private static final int TEXT_INSET_LEFT = 11;
     private static final int TEXT_INSET_TOP  = 20;
     private static final int TEXT_INSET_RIGHT = 113;
     private static final int TEXT_INSET_BOTTOM = 212;
 
-    // Scroll holder + scroller geometry (relative to details origin)
     private static final int HOLDER_X = 116;
     private static final int HOLDER_Y = 20;
     private static final int HOLDER_W = 3;
     private static final int HOLDER_H = 193;
-
     private static final int SCROLLER_W = 5;
     private static final int SCROLLER_H = 24;
-    private static final int SCROLLER_X = 115; // fixed—do NOT vary with drag (prevents drifting)
+    private static final int SCROLLER_X = 115;
     private static final int SCROLLER_TOP_Y = 20;
-    private static final int SCROLLER_BOTTOM_Y = 189; // top-left at lowest point
+    private static final int SCROLLER_BOTTOM_Y = 189;
 
-    // Scroll constants
-    private static final double WHEEL_LINES = 5.0;  // logical lines per wheel step
+    private static final double WHEEL_LINES = 5.0;
     private static final int LINE_SPACING = 2;
 
     private final AngelDemonScreen screen;
 
-    // Cached layout
     private int detailsOriginX;
     private int detailsOriginY;
 
-    // Scroll state
     private double contentHeight = 0.0;
     private double scrollOffset = 0.0;   // pixels
     private boolean dirty = true;
 
-    // Drag state
     private boolean draggingScroller = false;
-    private int dragYOffset = 0; // mouseY - scrollerTopY at click time
+    private int dragYOffset = 0;
 
-    // Built text buffer
     private final List<Row> rows = new ArrayList<>();
 
-    // Bullet glyph (compact, readable)
     private static final String BULLET = "▸ ";
 
     private static final DecimalFormat PCT1 = new DecimalFormat("0.0");
@@ -91,14 +83,14 @@ public final class DetailsPanelView {
 
     private static final String BLOCK_SPEED_KEY = "infiniteupgrades:block_speed";
 
+    // Verbose debug for the cost line
+    private static final boolean SOULCOST_LOG_VERBOSE = true;
+
     public DetailsPanelView(AngelDemonScreen screen) {
         this.screen = screen;
     }
 
-    // -------------- Resources ----------------
-
     private ResourceLocation detailsTex() {
-        // textures/gui/container/{angel|demon}/details.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/details.png"
@@ -106,37 +98,66 @@ public final class DetailsPanelView {
     }
 
     private ResourceLocation holderTex() {
-        // textures/gui/container/{angel|demon}/scroller_holder.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/scroller_holder.png"
         );
     }
-
     private ResourceLocation scrollerTex() {
-        // textures/gui/container/{angel|demon}/scroller.png
         return ResourceLocation.fromNamespaceAndPath(
                 "infiniteupgrades",
                 "textures/gui/container/" + screen.folder() + "/scroller.png"
         );
     }
 
-    // -------------- Public hooks ----------------
-
-    /** Mark contents dirty so they’ll rebuild next frame. */
     public void markDirty() { this.dirty = true; }
 
-    // -------------- Rendering ----------------
+    private void markDirtyIfMenuSoulCostChanged() {
+        try {
+            var menu = screen.getMenu();
+            if (menu == null) return;
+
+            boolean known = false;
+            int cost = 0;
+            int level = 0;
+
+            try {
+                known = menu.isClientSoulCostKnown();
+                cost  = menu.getClientSoulCost();
+                level = menu.getClientSoulCostLevel();
+            } catch (Throwable t) {
+                // If reading fails, treat as unknown. Also trigger a rebuild if we previously had data.
+                known = false;
+                cost = 0;
+                level = 0;
+            }
+
+            if (known != lastSoulKnown || cost != lastSoulCost || level != lastSoulLevel) {
+                lastSoulKnown = known;
+                lastSoulCost = cost;
+                lastSoulLevel = level;
+
+                // This is the critical part: container-data updates don't flip dirty automatically.
+                this.dirty = true;
+
+                if (SOULCOST_LOG_VERBOSE) {
+                    LOG.debug("[DetailsPanelView] markDirtyIfMenuSoulCostChanged: known={} cost={} level={}",
+                            known, cost, level);
+                }
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] markDirtyIfMenuSoulCostChanged failed: {}", t.toString());
+        }
+    }
 
     public void renderBg(GuiGraphics gg) {
-        // Compute details origin (to the right of MAIN)
         detailsOriginX = screen.getLeftPos() + MainGuiView.mainDrawDx() + MainGuiView.MAIN_W + GAP_TO_MAIN;
         detailsOriginY = screen.getTopPos()  + MainGuiView.mainDrawDy();
 
-        // Panel background
+        markDirtyIfMenuSoulCostChanged();
+
         gg.blit(detailsTex(), detailsOriginX, detailsOriginY, 0, 0, DETAILS_W, DETAILS_H, DETAILS_W, DETAILS_H);
 
-        // Holder (fixed)
         gg.blit(holderTex(),
                 detailsOriginX + HOLDER_X,
                 detailsOriginY + HOLDER_Y,
@@ -144,13 +165,11 @@ public final class DetailsPanelView {
                 HOLDER_W, HOLDER_H,
                 HOLDER_W, HOLDER_H);
 
-        // Build rows if needed
         if (dirty) {
             rebuildRows();
             dirty = false;
         }
 
-        // Clip text to the text area
         int clipX = detailsOriginX + TEXT_INSET_LEFT;
         int clipY = detailsOriginY + TEXT_INSET_TOP;
         int clipW = (TEXT_INSET_RIGHT - TEXT_INSET_LEFT);
@@ -160,30 +179,22 @@ public final class DetailsPanelView {
         drawRows(gg, clipX, clipY, clipW, clipH);
         gg.disableScissor();
 
-        // Draw scroller knob AFTER text (on top)
         int scrollerDrawX = detailsOriginX + SCROLLER_X;
         int scrollerDrawY = detailsOriginY + currentScrollerTopY();
         gg.blit(scrollerTex(), scrollerDrawX, scrollerDrawY, 0, 0, SCROLLER_W, SCROLLER_H, SCROLLER_W, SCROLLER_H);
     }
 
-    /** Overlay (optional). */
-    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) {
-        // no overlay for now
-    }
-
-    // -------------- Input ----------------
+    public void renderOverlay(GuiGraphics gg, int mouseX, int mouseY) { }
 
     public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         if (!isInsideTextOrBar(mouseX, mouseY)) return false;
-        double lineHeight = lineHeight();
-        double deltaPx = -delta * WHEEL_LINES * lineHeight; // wheel up -> negative scroll (move view up)
+        double deltaPx = -delta * WHEEL_LINES * lineHeight();
         setScrollOffset(scrollOffset + deltaPx);
         return true;
     }
 
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) return false; // left click only for dragging
-        // Check if click on scroller knob
+        if (button != 0) return false;
         int sx = detailsOriginX + SCROLLER_X;
         int sy = detailsOriginY + currentScrollerTopY();
         if (hit(mouseX, mouseY, sx, sy, SCROLLER_W, SCROLLER_H)) {
@@ -191,7 +202,6 @@ public final class DetailsPanelView {
             dragYOffset = (int)mouseY - sy;
             return true;
         }
-        // Click on holder: jump scroller toward click and start drag
         int hx = detailsOriginX + HOLDER_X;
         int hy = detailsOriginY + HOLDER_Y;
         if (hit(mouseX, mouseY, hx, hy, HOLDER_W, HOLDER_H)) {
@@ -221,8 +231,6 @@ public final class DetailsPanelView {
         return false;
     }
 
-    // -------------- Drawing helpers ----------------
-
     private void drawRows(GuiGraphics gg, int x, int y, int w, int h) {
         Font font = screen.getMinecraft().font;
         int yCursor = y - (int)scrollOffset;
@@ -230,10 +238,8 @@ public final class DetailsPanelView {
         for (Row r : rows) {
             for (FormattedCharSequence line : r.lines) {
                 int lineH = (int)lineHeight();
-                // Vertical clip test
                 if (yCursor + lineH >= y && yCursor <= y + h) {
-                    int color = r.color;
-                    gg.drawString(font, line, x, yCursor, color, false);
+                    gg.drawString(font, line, x, yCursor, r.color, false);
                 }
                 yCursor += (int)lineHeight() + LINE_SPACING;
             }
@@ -244,21 +250,15 @@ public final class DetailsPanelView {
         return screen.getMinecraft().font.lineHeight;
     }
 
-    // -------------- Layout/build ----------------
-
     private void rebuildRows() {
         rows.clear();
 
-        // Suppress ALL details during an active infusion lock.
         if (isInfusionLocked()) {
             contentHeight = 0.0;
             clampScrollToContent();
             return;
         }
 
-        // Subject item:
-        // - Prefer slot 0 (input) if present.
-        // - Else, use slot 2 **only if it's a REAL (non-preview) result** after infusion.
         ItemStack subj = ItemStack.EMPTY;
         try {
             var menu = screen.getMenu();
@@ -275,12 +275,10 @@ public final class DetailsPanelView {
         final RitualType ritual = screen.getMenu().ritual();
         final int width = TEXT_INSET_RIGHT - TEXT_INSET_LEFT;
 
-        // Item line (so user sees we detected the subject) — now white
         String itemName = subj.isEmpty() ? "—" : subj.getHoverName().getString();
         addWrapped(itemName, ChatFormatting.WHITE, width);
         addBlank();
 
-        // Section: Next attempt
         addHeader("Next attempt");
         Double ruleStep = uniqueRuleStepForThisItem(subj, ritual);
         if (ruleStep != null) {
@@ -289,7 +287,6 @@ public final class DetailsPanelView {
             addWrapped(BULLET + "Per-upgrade boost: varies by attribute (see below)", ChatFormatting.WHITE, width);
         }
 
-        // Chance (with reputation)
         ChanceParts chance = computeChanceWithRep(subj, ritual);
         String repBonusStr = (chance.repBonus >= 0 ? "+" : "")
                 + PCT1.format(chance.repBonus * 100.0) + "%";
@@ -300,29 +297,23 @@ public final class DetailsPanelView {
                 + PCT1.format(chance.base * 100.0) + "% " + repBonusStr
                 + " from " + repUnifiedStr + " rep)", ChatFormatting.WHITE, width);
 
-        // Soul cost line (same model as server deduction)
         buildSoulCostLine(subj, width);
 
-        // Divider
         addBlank();
 
-        // Totals
         addHeader("Totals");
         buildTotals(subj, width);
 
         addBlank();
 
-        // Recent history
         addHeader("Recent history");
         buildRecentHistory(subj, width);
 
         addBlank();
 
-        // Possible upgrades (now also shows Block Speed for mining tools)
         addHeader("Possible upgrades");
         buildPossibleUpgradesForItem(subj, ritual, width);
 
-        // Compute content height
         int total = 0;
         for (Row r : rows) {
             total += r.lines.size() * ((int)lineHeight() + LINE_SPACING);
@@ -330,8 +321,6 @@ public final class DetailsPanelView {
         contentHeight = total;
         clampScrollToContent();
     }
-
-    // ----- Content builders -----
 
     private void buildTotals(ItemStack s, int width) {
         Map<String, TotalsInfo> tot = readTotalsWithCounts(s);
@@ -341,19 +330,18 @@ public final class DetailsPanelView {
         }
         for (var e : tot.entrySet()) {
             String display = resolveAttrDisplayName(e.getKey());
-            double pct = e.getValue().sumPercent; // fraction
+            double pct = e.getValue().sumPercent;
             int count   = e.getValue().count;
             String line = BULLET + display + " " +
                     (pct >= 0 ? "+" : "") + PCT1.format(pct * 100.0) + "%" +
                     " (+" + count + ")";
             addWrapped(line, ChatFormatting.WHITE, width);
         }
-        // Append our custom tool stat if this is a mining tool
         try {
             if (ToolSpeedUtil.isMiningTool(s) && !tot.containsKey(BLOCK_SPEED_KEY)) {
-                double bonus = ToolSpeedUtil.getBonus(s); // fraction
+                double bonus = ToolSpeedUtil.getBonus(s);
                 if (Math.abs(bonus) > 1.0e-6) {
-                    String pct = ToolSpeedUtil.formatPercentNoSign(bonus); // e.g. "15%"
+                    String pct = ToolSpeedUtil.formatPercentNoSign(bonus);
                     String line = BULLET + "Block Speed +" + pct;
                     addWrapped(line, ChatFormatting.WHITE, width);
                     LOG.debug("[DetailsPanelView] Totals: show tool_speed_bonus {} for {} (fallback, no totals key)", pct, s.getItem());
@@ -366,16 +354,8 @@ public final class DetailsPanelView {
 
     @org.jetbrains.annotations.Nullable
     private Double uniqueRuleStepForThisItem(ItemStack s, RitualType ritual) {
-        // Return a single per-upgrade step (fraction) only if ALL touched stats
-        // share the same final step after:
-        //   - per-level override/default
-        //   - ritual multiplier
-        //   - FINAL MULTIPLIER (per-attribute map, + Block Speed synthetic id)
-        //
-        // Otherwise, return null so the UI shows "varies by attribute".
         if (s == null || s.isEmpty()) return null;
 
-        // Build the candidate set (rule-backed present attributes + Block Speed if applicable)
         Set<ResourceLocation> presentAttrs = new java.util.LinkedHashSet<>();
         try {
             ItemAttributeModifiers cur = s.getAttributeModifiers();
@@ -391,34 +371,27 @@ public final class DetailsPanelView {
         } catch (Throwable ignored) {}
 
         var snap = UpgradeServerConfig.snapshot();
-        int level = parsePlusLevel(s);
+
+        int level = getUpgradeLevelClientSafe(s);
         double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
 
-        // Build the working list of candidates (only those with rules enabled)
         List<Double> steps = new ArrayList<>();
         try {
             for (var rule : snap.attributes) {
                 if (!rule.enabled) continue;
                 if (!presentAttrs.contains(rule.id)) continue;
 
-                // Base step for this attribute (fraction)…
                 double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
                 double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                // Apply FINAL MULTIPLIER (server-side per-stat knob)
                 step *= Math.max(0.0, snap.finalMultiplier(rule.id));
-
-                // Ignore non-positive results
                 if (step > 0.0) steps.add(step);
             }
 
-            // If the item is a mining tool, also include Block Speed as a candidate
             if (ToolSpeedUtil.isMiningTool(s)) {
-                // Per-level global step model for Block Speed (same base model you show elsewhere)
-                double base = snap.percentBonusForLevelUp(level); // fraction
+                double base = snap.percentBonusForLevelUp(level);
                 double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                // Apply FINAL MULTIPLIER for Block Speed
                 ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
                 step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
 
@@ -429,10 +402,8 @@ public final class DetailsPanelView {
             return null;
         }
 
-        // If nothing eligible, no unique value
         if (steps.isEmpty()) return null;
 
-        // If all steps are (near-)identical, return that value; else null
         Double first = steps.get(0);
         for (int i = 1; i < steps.size(); i++) {
             if (Math.abs(steps.get(i) - first) > 1.0e-9) {
@@ -449,7 +420,6 @@ public final class DetailsPanelView {
             return;
         }
 
-        // Newest first
         Collections.reverse(events);
 
         for (HistEvent ev : events) {
@@ -459,7 +429,6 @@ public final class DetailsPanelView {
             String display = resolveAttrDisplayName(ev.attrId);
             String amount = (ev.appliedPercent >= 0 ? "+" : "") + PCT1.format(ev.appliedPercent * 100.0) + "%";
 
-            // Default row color = white; styled segment overrides for the jump
             Component line = Component.literal(BULLET)
                     .append(Component.literal("L" + ev.levelBefore + "→L" + ev.levelAfter).withStyle(jumpColor))
                     .append(Component.literal("  " + display + "  " + amount));
@@ -469,7 +438,6 @@ public final class DetailsPanelView {
     }
 
     private void buildPossibleUpgradesForItem(ItemStack s, RitualType ritual, int width) {
-        // Determine present attributes on the item (current + defaults)
         Set<ResourceLocation> present = new LinkedHashSet<>();
         try {
             ItemAttributeModifiers cur = s.getAttributeModifiers();
@@ -485,21 +453,19 @@ public final class DetailsPanelView {
         } catch (Throwable ignored) {}
 
         var snap = UpgradeServerConfig.snapshot();
-        int level = parsePlusLevel(s);
+
+        int level = getUpgradeLevelClientSafe(s);
         double ritualMult = ritual == RitualType.ANGEL ? snap.angelStepMult : snap.demonStepMult;
 
         int shown = 0;
 
-        // Vanilla attributes that are present and rule-managed
         for (var rule : snap.attributes) {
             if (!rule.enabled) continue;
             if (!present.contains(rule.id)) continue;
 
-            // Base step
             double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
             double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-            // Apply FINAL MULTIPLIER from server config
             double finalMult = Math.max(0.0, snap.finalMultiplier(rule.id));
             step *= finalMult;
 
@@ -508,20 +474,16 @@ public final class DetailsPanelView {
             String display = resolveAttrDisplayName(rule.id.toString());
             String dir = rule.direction == UpgradeServerConfig.Direction.INCREASE ? "+" : "−";
 
-            // Example: "▸ Attack Damage  (+7.5% per upgrade)"
-            // We keep the line simple, since history/totals already store post-multiplier values.
             String line = BULLET + display + "  (" + dir + PCT1.format(step * 100.0) + "% per upgrade)";
             addWrapped(line, ChatFormatting.WHITE, width);
             shown++;
         }
 
-        // Custom Block Speed (if mining tool)
         try {
             if (ToolSpeedUtil.isMiningTool(s)) {
-                double base = snap.percentBonusForLevelUp(level); // fraction
+                double base = snap.percentBonusForLevelUp(level);
                 double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                // FINAL MULTIPLIER for Block Speed
                 ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
                 double finalMult = Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
                 step *= finalMult;
@@ -543,12 +505,10 @@ public final class DetailsPanelView {
         }
     }
 
-    // ----- Chance with reputation -----
-
     private static final class ChanceParts {
-        final double base;      // base chance fraction
-        final double repBonus;  // reputation bonus fraction (can be negative)
-        final double total;     // clamped total
+        final double base;
+        final double repBonus;
+        final double total;
         final double repUnified;
         ChanceParts(double base, double repBonus, double total, double repUnified) {
             this.base = base; this.repBonus = repBonus; this.total = total; this.repUnified = repUnified;
@@ -556,8 +516,8 @@ public final class DetailsPanelView {
     }
 
     private ChanceParts computeChanceWithRep(ItemStack s, RitualType ritual) {
-        int currentLevel = parsePlusLevel(s);
-        double base = UpgradeService.getSuccessChance(currentLevel); // server model (base)
+        int currentLevel = getUpgradeLevelClientSafe(s);
+        double base = UpgradeService.getSuccessChance(currentLevel);
 
         var snap = UpgradeServerConfig.snapshot();
         double unified = screen.getRepUnified();
@@ -570,44 +530,23 @@ public final class DetailsPanelView {
         return new ChanceParts(base, repBonus, total, unified);
     }
 
-    /**
-     * Show how many souls the next upgrade will cost, and how many are available
-     * in the Soul Cage in slot 1 (if any).
-     *
-     * Uses the same server-side model as the real deduction:
-     * UpgradeService.getSoulCostForNextLevel(level).
-     */
     private void buildSoulCostLine(ItemStack subj, int width) {
-        // If we have no subject item, nothing to show
         if (subj == null || subj.isEmpty()) {
             addWrapped(BULLET + "Soul cost: —", ChatFormatting.WHITE, width);
             return;
         }
 
-        int currentLevel;
-        try {
-            currentLevel = parsePlusLevel(subj);
-        } catch (Throwable ignored) {
-            currentLevel = 0;
-        }
+        final int currentLevel = getUpgradeLevelClientSafe(subj);
 
-        int cost;
-        try {
-            cost = Math.max(0, UpgradeService.getSoulCostForNextLevel(currentLevel));
-        } catch (Throwable t) {
-            LOG.error("[DetailsPanelView] buildSoulCostLine: getSoulCostForNextLevel failed: {}", t.toString());
-            cost = 0;
-        }
-
-        // Look at slot 1 (resource) for a Soul Cage and its current soul total
-        ItemStack cage = ItemStack.EMPTY;
+        // Souls available (client can read this from the cage item in slot 1)
         int available = 0;
+        boolean hasCage = false;
         try {
-            AngelDemonMenu menu = screen.getMenu();
+            var menu = screen.getMenu();
             if (menu != null) {
                 ItemStack s1 = menu.getSlot(1).getItem();
                 if (SoulCageItem.isCage(s1)) {
-                    cage = s1;
+                    hasCage = true;
                     available = SoulCageItem.getTotal(s1);
                 }
             }
@@ -615,14 +554,49 @@ public final class DetailsPanelView {
             LOG.error("[DetailsPanelView] buildSoulCostLine: failed reading cage slot: {}", t.toString());
         }
 
-        // Build line + color based on availability
+        // ✅ Server-authoritative only (synced via menu ContainerData)
+        boolean serverKnown = false;
+        int serverCost = 0;
+        int serverLevel = 0;
+
+        try {
+            var menu = screen.getMenu();
+            if (menu != null) {
+                serverKnown = menu.isClientSoulCostKnown();
+                serverCost  = menu.getClientSoulCost();
+                serverLevel = menu.getClientSoulCostLevel();
+            }
+        } catch (Throwable t) {
+            LOG.error("[DetailsPanelView] buildSoulCostLine: failed reading server synced soul cost: {}", t.toString());
+            serverKnown = false;
+        }
+
+        // Only trust it if the server computed it for the same item level we’re displaying
+        boolean usable = serverKnown && (serverLevel == currentLevel);
+
+        if (SOULCOST_LOG_VERBOSE) {
+            LOG.debug("[DetailsPanelView] SoulCost UI: itemLevel={} serverKnown={} serverLevel={} serverCost={} usable={}",
+                    currentLevel, serverKnown, serverLevel, serverCost, usable);
+        }
+
+        if (!usable) {
+            // Better to show "??" than incorrect info
+            String line = hasCage
+                    ? (BULLET + "Soul cost: ?? / " + available + " souls")
+                    : (BULLET + "Soul cost: ?? souls");
+            addWrapped(line, ChatFormatting.GRAY, width);
+            return;
+        }
+
+        int cost = Math.max(0, serverCost);
+
         String line;
         ChatFormatting color;
 
         if (cost <= 0) {
             line = BULLET + "Soul cost: 0 (no souls required)";
             color = ChatFormatting.WHITE;
-        } else if (cage.isEmpty()) {
+        } else if (!hasCage) {
             line = BULLET + "Soul cost: " + cost + " souls (no Soul Cage)";
             color = ChatFormatting.RED;
         } else {
@@ -634,7 +608,38 @@ public final class DetailsPanelView {
         addWrapped(line, color, width);
     }
 
-    // -------------- Small helpers ----------------
+    private int getUpgradeLevelClientSafe(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return 0;
+
+        int nbtLevel = 0;
+        int nameLevel = 0;
+
+        try {
+            nbtLevel = Math.max(0, UpgradeService.readLevelFromTagOrZero(stack));
+        } catch (Throwable t) {
+            LOG.debug("[DetailsPanelView] getUpgradeLevelClientSafe: readLevelFromTagOrZero failed: {}", t.toString());
+            nbtLevel = 0;
+        }
+
+        try {
+            nameLevel = Math.max(0, parsePlusLevel(stack));
+        } catch (Throwable ignored) {
+            nameLevel = 0;
+        }
+
+        int chosen = (nbtLevel > 0) ? nbtLevel : nameLevel;
+
+        if (SOULCOST_LOG_VERBOSE) {
+            if (nbtLevel != nameLevel) {
+                LOG.debug("[DetailsPanelView] Level mismatch for {}: nbtLevel={} nameLevel={} -> chosen={}",
+                        stack.getItem(), nbtLevel, nameLevel, chosen);
+            } else {
+                LOG.debug("[DetailsPanelView] Level read for {}: level={} (nbt/name agree)", stack.getItem(), chosen);
+            }
+        }
+
+        return chosen;
+    }
 
     private boolean isInsideTextOrBar(double mouseX, double mouseY) {
         int x = (int)mouseX - detailsOriginX;
@@ -689,12 +694,11 @@ public final class DetailsPanelView {
 
     private void addWrapped(Component text, int defaultColor, int width) {
         Font font = screen.getMinecraft().font;
-        List<FormattedCharSequence> seq = font.split(text, width); // preserves per-segment styles
+        List<FormattedCharSequence> seq = font.split(text, width);
         rows.add(new Row(seq, defaultColor));
     }
 
     private void addWrapped(String text, ChatFormatting color, int width) {
-        // Use the row's default color for the whole line (no per-segment styles here).
         addWrapped(Component.literal(text), mapColor(color), width);
     }
 
@@ -718,7 +722,6 @@ public final class DetailsPanelView {
     }
 
     private String resolveAttrDisplayName(String attrId) {
-        // Capitalize our synthetic stat
         if (BLOCK_SPEED_KEY.equals(attrId)) return "Block Speed";
 
         try {
@@ -741,11 +744,9 @@ public final class DetailsPanelView {
         return s.replace('_', ' ').replace('.', ' ');
     }
 
-    // --- Totals + counts ---
-
     private static final class TotalsInfo {
-        final double sumPercent; // fraction
-        final int count;         // number of upgrades recorded (net)
+        final double sumPercent;
+        final int count;
         TotalsInfo(double sumPercent, int count) {
             this.sumPercent = sumPercent;
             this.count = count;
@@ -761,7 +762,7 @@ public final class DetailsPanelView {
             var totals = root.getCompound("totals");
             for (String key : totals.getAllKeys()) {
                 var a = totals.getCompound(key);
-                double sumPct = a.getDouble("sumPercent"); // fraction
+                double sumPct = a.getDouble("sumPercent");
                 int count = a.getInt("count");
                 out.put(key, new TotalsInfo(sumPct, Math.max(0, count)));
             }
@@ -773,7 +774,7 @@ public final class DetailsPanelView {
         String attrId;
         int levelBefore;
         int levelAfter;
-        double appliedPercent; // fraction (+/-)
+        double appliedPercent;
     }
 
     private List<HistEvent> readHistory(ItemStack s) {
@@ -806,8 +807,6 @@ public final class DetailsPanelView {
 
     private static String pct1(double frac) { return PCT1.format(frac * 100.0) + "%"; }
 
-    // --- New local helpers ---
-
     private boolean isInfusionLocked() {
         AngelDemonMenu menu = screen.getMenu();
         if (menu == null) return false;
@@ -825,7 +824,6 @@ public final class DetailsPanelView {
         }
     }
 
-    // -------------- Row struct ----------------
     private static final class Row {
         final List<FormattedCharSequence> lines;
         final int color;
