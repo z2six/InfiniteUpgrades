@@ -833,7 +833,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             LogUtils.getLogger().error("[AngelDemonMenu] quickMoveStack failed: {}", t.toString());
             return ItemStack.EMPTY;
         }
-    } // a
+    }
 
     private void loadSlotsFromAttachmentServer() {
         if (owner == null || owner.level().isClientSide) return;
