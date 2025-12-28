@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/feature/souls/entity/SoulOrbEntity.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/feature/souls/entity/SoulOrbEntity.java
 // SoulOrbEntity.java — souls that hover, home to cages, clump-friendly via storedUnits; supports permanent lifetime
 package org.z2six.infiniteupgrades.feature.souls.entity;
 
@@ -31,14 +31,12 @@ import java.util.UUID;
  *
  * Soul orbs that hover, can home into players carrying a Soul Cage, and credit the cage on pickup.
  *
- * Now supports:
- *  - Clumping: an orb carries an explicit "storedUnits" value so multiple drops can be combined losslessly.
- *  - Permanent lifetime: if configured, orbs never despawn and never fade.
+ * HARD REQUIREMENTS implemented here:
+ *  - #1A: Orbs must never persist across restarts -> shouldBeSaved() = false.
+ *  - #1B: If a legacy orb somehow loads from disk anyway -> discard instantly.
+ *  - #3: If NO player is within 30 blocks -> discard instantly (every server tick).
  *
- * Smooth motion:
- *  - Uses velocity + move(MoverType.SELF, vel) instead of per-tick setPos teleports.
- *  - Idle hover steers toward a target Y with clamped velocity (no teleporting).
- *  - Homing accelerates over time via delta movement; movement is applied via move().
+ * Clumping is implemented in SoulDrops (merge target refreshes lifetime via refreshLifetimeFromNow()).
  */
 public class SoulOrbEntity extends Entity {
     private static final Logger LOG = LogUtils.getLogger();
@@ -48,6 +46,10 @@ public class SoulOrbEntity extends Entity {
     private static final boolean LOG_TICKS  = false;  // silenced spam
     private static final int     LOG_EVERY  = 20;     // ticks
 
+    // HARD RULE: nuking when players out of range
+    public static final double PLAYER_KEEP_RADIUS = 30.0;
+    private static final double PLAYER_KEEP_RADIUS_SQR = PLAYER_KEEP_RADIUS * PLAYER_KEEP_RADIUS;
+
     public enum Tier { SMALL, MEDIUM, LARGE, EXTRA_LARGE }
 
     private static final EntityDataAccessor<Integer> DATA_TIER =
@@ -56,14 +58,17 @@ public class SoulOrbEntity extends Entity {
     private static final EntityDataAccessor<Integer> DATA_UNITS =
             SynchedEntityData.defineId(SoulOrbEntity.class, EntityDataSerializers.INT);
 
-    /** 0 = permanent, >0 = despawn after N ticks. */
+    /** 0 = permanent, >0 = despawn after N ticks (compared to tickCount). */
     private int lifetime = 20 * 30; // default 30 seconds unless overridden on construction
 
+    // Legacy-load detection (Option B). If this entity was read from disk, we nuke instantly.
+    private boolean loadedFromDisk = false;
+
     // Hover state
-    private double hoverBaseY;           // y around which we bob
-    private float hoverPhaseOffset;      // per-orb phase
-    private float hoverSpeed = 0.08f;    // radians/tick
-    private float hoverAmplitude = 0.08f;// blocks
+    private double hoverBaseY;            // y around which we bob
+    private float hoverPhaseOffset;       // per-orb phase
+    private float hoverSpeed = 0.08f;     // radians/tick
+    private float hoverAmplitude = 0.08f; // blocks
 
     // Light cleanup bookkeeping (currently not placing lights; left for compatibility)
     private BlockPos lightAnchor;
@@ -78,8 +83,8 @@ public class SoulOrbEntity extends Entity {
     private double  speedMax = 1.10;     // clamp
 
     // Idle hover steering
-    private static final double HOVER_MAX_VEL  = 0.10;  // clamp per-axis for idle hover
-    private static final double HOVER_STIFFNESS= 0.25;  // how fast we approach targetY per tick
+    private static final double HOVER_MAX_VEL   = 0.10;  // clamp per-axis for idle hover
+    private static final double HOVER_STIFFNESS = 0.25;  // how fast we approach targetY per tick
 
     public SoulOrbEntity(EntityType<? extends SoulOrbEntity> type, net.minecraft.world.level.Level level) {
         super(type, level);
@@ -124,6 +129,15 @@ public class SoulOrbEntity extends Entity {
 
     private static String fmt(double v) { return String.format(Locale.ROOT, "%.3f", v); }
 
+    /**
+     * HARD REQUIREMENT #1A:
+     * Never persist souls across restart. This prevents them from being written into chunk NBT.
+     */
+    @Override
+    public boolean shouldBeSaved() {
+        return false;
+    }
+
     @Override
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(DATA_TIER, 0);
@@ -132,6 +146,10 @@ public class SoulOrbEntity extends Entity {
 
     @Override
     protected void readAdditionalSaveData(CompoundTag tag) {
+        // If we are being read from disk, mark and nuke on first server tick (Option B fallback).
+        // NOTE: This method can be invoked during actual disk entity load.
+        this.loadedFromDisk = true;
+
         if (tag.contains("Tier")) setTierOrdinal(Mth.clamp(tag.getInt("Tier"), 0, Tier.values().length - 1));
         if (tag.contains("Life")) this.lifetime = Math.max(0, tag.getInt("Life")); // 0 = permanent
         if (tag.contains("HoverBaseY")) this.hoverBaseY = tag.getDouble("HoverBaseY");
@@ -155,6 +173,7 @@ public class SoulOrbEntity extends Entity {
 
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
+        // Even though shouldBeSaved() is false, keep this robust for any weird edge cases.
         tag.putInt("Tier", getTierOrdinal());
         tag.putInt("Life", this.lifetime);
         tag.putDouble("HoverBaseY", this.hoverBaseY);
@@ -168,33 +187,110 @@ public class SoulOrbEntity extends Entity {
         tag.putInt("Units", getStoredUnits());
     }
 
+    /**
+     * Called by clumping logic to ensure a merged orb doesn't "inherit" a nearly-expired lifetime.
+     * If lifetimeTicks == 0, the orb becomes permanent.
+     *
+     * Safe behavior:
+     * - Resets tickCount so lifetime countdown restarts from "now".
+     * - Also clears any fade window (fade uses tickCount).
+     */
+    public void refreshLifetimeFromNow(int lifetimeTicks) {
+        try {
+            this.lifetime = Math.max(0, lifetimeTicks);
+            this.tickCount = 0; // restart lifetime countdown AND fade math
+            if (LOG_SPAWN && !this.level().isClientSide) {
+                LOG.info("[SoulOrbEntity] refreshLifetimeFromNow: id={}, newLifeTicks={}, permanent={}",
+                        this.getId(), this.lifetime, (this.lifetime == 0));
+            }
+        } catch (Throwable t) {
+            LOG.error("[SoulOrbEntity] refreshLifetimeFromNow failed: {}", t.toString());
+        }
+    }
+
     @Override
     public void tick() {
         super.tick();
 
-        if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
-            LOG.info("[SoulOrbEntity] tick: id={}, tier={}, units={}, pos=({},{},{}), dim={}, lifeLeft={}t, permanent={}, homing={}",
-                    this.getId(), getTier(), getStoredUnits(),
-                    fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
-                    this.level().dimension().location(),
-                    (this.lifetime == 0 ? -1 : Math.max(0, this.lifetime - this.tickCount)),
-                    (this.lifetime == 0), homing);
-        }
-
         if (!level().isClientSide) {
-            // Despawn if lifetime reached (unless permanent)
-            if (this.lifetime > 0 && this.tickCount >= this.lifetime) {
+            final ServerLevel sl = (ServerLevel) this.level();
+
+            // HARD REQUIREMENT #1B (fallback): if a legacy orb loaded from disk, nuke it immediately.
+            if (this.loadedFromDisk) {
+                if (LOG_SPAWN) {
+                    LOG.warn("[SoulOrbEntity] LEGACY-LOAD NUKE: id={}, tier={}, units={}, dim={}, pos=({},{},{}). Removing immediately.",
+                            this.getId(), getTier(), getStoredUnits(),
+                            sl.dimension().location(),
+                            fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()));
+                }
                 this.discard();
                 return;
             }
-            serverMotionAndCollection();
+
+            // HARD REQUIREMENT #3: if no player is within 30 blocks, instantly nuke.
+            if (!isAnyPlayerWithinKeepRadius(sl)) {
+                if (LOG_SPAWN) {
+                    LOG.info("[SoulOrbEntity] OUT-OF-RANGE NUKE: id={}, tier={}, units={}, dim={}, pos=({},{},{}). Removing immediately.",
+                            this.getId(), getTier(), getStoredUnits(),
+                            sl.dimension().location(),
+                            fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()));
+                }
+                this.discard();
+                return;
+            }
+
+            if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
+                LOG.info("[SoulOrbEntity] tick: id={}, tier={}, units={}, pos=({},{},{}), dim={}, lifeLeft={}t, permanent={}, homing={}",
+                        this.getId(), getTier(), getStoredUnits(),
+                        fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
+                        this.level().dimension().location(),
+                        (this.lifetime == 0 ? -1 : Math.max(0, this.lifetime - this.tickCount)),
+                        (this.lifetime == 0), homing);
+            }
+
+            // Despawn if lifetime reached (unless permanent)
+            if (this.lifetime > 0 && this.tickCount >= this.lifetime) {
+                if (LOG_SPAWN) {
+                    LOG.info("[SoulOrbEntity] LIFETIME DESPAWN: id={}, tier={}, units={}, dim={}, pos=({},{},{}), lifeTicks={}",
+                            this.getId(), getTier(), getStoredUnits(),
+                            sl.dimension().location(),
+                            fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
+                            this.lifetime);
+                }
+                this.discard();
+                return;
+            }
+
+            serverMotionAndCollection(sl);
         }
+
         // CLIENT: vanilla interpolates to server positions/motion
     }
 
-    private void serverMotionAndCollection() {
-        final ServerLevel sl = (ServerLevel) this.level();
+    private boolean isAnyPlayerWithinKeepRadius(ServerLevel sl) {
+        try {
+            final double r = PLAYER_KEEP_RADIUS;
+            AABB box = new AABB(
+                    this.getX() - r, this.getY() - r, this.getZ() - r,
+                    this.getX() + r, this.getY() + r, this.getZ() + r
+            );
+            List<Player> players = sl.getEntitiesOfClass(Player.class, box, EntitySelector.NO_SPECTATORS);
+            for (Player p : players) {
+                if (p == null) continue;
+                if (!p.isAlive()) continue;
+                if (p.distanceToSqr(this) <= PLAYER_KEEP_RADIUS_SQR) {
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            // If anything goes wrong, be safe: nuke (prevents leaks).
+            LOG.error("[SoulOrbEntity] isAnyPlayerWithinKeepRadius failed; nuking orb. err={}", t.toString());
+            return false;
+        }
+        return false;
+    }
 
+    private void serverMotionAndCollection(ServerLevel sl) {
         // If already homing, check pickup first (<= 1 block radius).
         if (homing) {
             Player target = getHomingTarget(sl);

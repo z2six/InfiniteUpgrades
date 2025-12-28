@@ -35,6 +35,11 @@ import org.z2six.infiniteupgrades.feature.reputation.logic.RepEvents;
 import org.z2six.infiniteupgrades.feature.souls.client.render.SoulOrbRenderer;
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
+// NEW: souls logic registrations (no EventBusSubscriber)
+import org.z2six.infiniteupgrades.feature.souls.logic.ChunkSoulScrubber;
+import org.z2six.infiniteupgrades.feature.souls.logic.SoulDrops;
+import org.z2six.infiniteupgrades.feature.souls.logic.StartupCleanup;
+
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
 
@@ -81,6 +86,20 @@ public class Infiniteupgrades {
 
             // NEW: multiply mining speed by our "block_speed" bonus
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.BreakSpeedHooks::onBreakSpeed);
+
+            // -------------------- SOULS: HARD REQUIREMENTS REGISTRATION --------------------
+            // #1B: scrub legacy saved souls out of chunk NBT during chunk load
+            NeoForge.EVENT_BUS.addListener(ChunkSoulScrubber::onChunkDataLoad);
+
+            // #1 (loaded chunks): cleanup on server start + level load (belt & suspenders)
+            NeoForge.EVENT_BUS.addListener(StartupCleanup::onServerStarted);
+            NeoForge.EVENT_BUS.addListener(StartupCleanup::onLevelLoad);
+
+            // #2/#4: drop gating + clumping
+            NeoForge.EVENT_BUS.addListener(SoulDrops::onLivingDrops);
+
+            LOGGER.info("[Infiniteupgrades] Registered souls listeners (ChunkSoulScrubber, StartupCleanup, SoulDrops)");
+            // -------------------------------------------------------------------------------
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to register game listeners", t);
         }

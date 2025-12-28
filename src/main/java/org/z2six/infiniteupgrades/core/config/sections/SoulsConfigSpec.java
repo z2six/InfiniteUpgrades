@@ -1,4 +1,4 @@
-// File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/SoulsConfigSpec.java
+// MainFile: src/main/java/org/z2six/infiniteupgrades/core/config/sections/SoulsConfigSpec.java
 // SoulsConfigSpec.java — server-authoritative soul drop + upgrade cost config (with permanent lifetime support)
 package org.z2six.infiniteupgrades.core.config.sections;
 
@@ -116,6 +116,17 @@ public final class SoulsConfigSpec {
         blacklistIds      = B.comment(
                 "Entities that must NOT drop orbs (overrides whitelist if both are set)."
         ).defineListAllowEmpty("blacklistEntities", List.of(), o -> o instanceof String);
+
+        // ---- Cosmetic/utility (FIX: these were declared but not initialized -> compile error) ----
+        spawnLights = B.comment(
+                "If true, soul orbs may spawn small light(s) around them (if implemented by the mod).",
+                "This mod's current code may ignore this setting depending on build/version."
+        ).define("spawnLights", false);
+
+        lightRadiusBlocks = B.comment(
+                "If spawnLights is enabled, the radius in blocks affected by the light behavior.",
+                "This mod's current code may ignore this setting depending on build/version."
+        ).defineInRange("lightRadiusBlocks", 6, 0, 64);
 
         // ---- Collection ----
         collectRangeBlocks = B.comment(
