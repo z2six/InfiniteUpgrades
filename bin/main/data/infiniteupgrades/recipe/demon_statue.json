@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "NNN",
+    "NBN",
+    "DDD"
+  ],
+  "key": {
+    "N": { "item": "minecraft:nether_bricks" },
+    "B": { "item": "minecraft:blaze_rod" },
+    "D": { "item": "minecraft:deepslate_tiles" }
+  },
+  "result": { "id": "infiniteupgrades:demon_statue", "count": 1 }
+}

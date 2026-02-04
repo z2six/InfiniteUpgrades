@@ -41,7 +41,7 @@ public final class ChunkSoulScrubber {
             if (stripped > 0) {
                 long total = TOTAL_STRIPPED.addAndGet(stripped);
                 long chunks = TOTAL_CHUNKS_TOUCHED.incrementAndGet();
-                LOG.info("[ChunkSoulScrubber] stripped={} legacy souls from chunkNbt (runningTotalStripped={}, chunksTouched={})",
+                LOG.debug("[ChunkSoulScrubber] stripped={} legacy souls from chunkNbt (runningTotalStripped={}, chunksTouched={})",
                         stripped, total, chunks);
             }
         } catch (Throwable t) {

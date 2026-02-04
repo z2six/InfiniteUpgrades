@@ -1,0 +1,62 @@
+# MainFile: src/main/templates/META-INF/neoforge.mods.toml
+# This is an example mods.toml file. It contains the data relating to the loading mods.
+# There are several mandatory fields (#mandatory), and many more that are optional (#optional).
+# The overall format is standard TOML format, v0.5.0.
+
+# The name of the mod loader type to load - for regular FML @Mod mods it should be javafml
+modLoader = "javafml" #mandatory
+
+# A version range to match for said mod loader.
+loaderVersion = "[4,)" #mandatory
+
+# The license for your mod.
+license = "MIT"
+
+# A list of mods - count is determined by the mod loader
+[[mods]] #mandatory
+# Your mod id
+modId = "infiniteupgrades" #mandatory
+# Your mod version
+version = "1.0.9" #mandatory
+# Display name in Mods UI
+displayName = "InfiniteUpgrades" #mandatory
+# Authors shown in Mods UI
+authors = "" #optional
+
+# Multi-line description shown in Mods UI
+description = ''''''
+
+# Mixins configuration (optional, but you already ship one)
+[[mixins]]
+config = "infiniteupgrades.mixins.json"
+
+# --- Dependencies ---
+
+# Require NeoForge itself (expanded by template properties)
+[[dependencies."infiniteupgrades"]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21,)"
+ordering = "NONE"
+side = "BOTH"
+
+# Require the correct Minecraft version range (expanded by template properties)
+[[dependencies."infiniteupgrades"]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "BOTH"
+
+# Require GeckoLib (you are using GeckoLib 4.7.x on MC 1.21.1)
+[[dependencies."infiniteupgrades"]]
+modId = "geckolib"
+type = "required"
+# Any 4.7.x or newer is acceptable; adjust if you want to pin tighter.
+versionRange = "[4.7.0,)"
+ordering = "NONE"
+side = "BOTH"
+
+# --- Optional extra features section example (disabled) ---
+#[features."infiniteupgrades"]
+#openGLVersion = "[3.2,)"

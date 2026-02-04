@@ -29,7 +29,7 @@ public final class StartupCleanup {
             for (ServerLevel sl : server.getAllLevels()) {
                 total += nukeLevel(sl, "server-started");
             }
-            LOG.info("[StartupCleanup] server-started: removedTotalSoulsInLoadedChunks={}", total);
+            LOG.debug("[StartupCleanup] server-started: removedTotalSoulsInLoadedChunks={}", total);
         } catch (Throwable t) {
             LOG.error("[StartupCleanup] onServerStarted failed: {}", t.toString());
         }
@@ -39,7 +39,7 @@ public final class StartupCleanup {
         try {
             if (evt.getLevel() instanceof ServerLevel sl) {
                 int removed = nukeLevel(sl, "level-load");
-                LOG.info("[StartupCleanup] level-load: dim={}, removedSoulsInLoadedChunks={}",
+                LOG.debug("[StartupCleanup] level-load: dim={}, removedSoulsInLoadedChunks={}",
                         sl.dimension().location(), removed);
             }
         } catch (Throwable t) {
@@ -66,7 +66,7 @@ public final class StartupCleanup {
                     sl.dimension().location(), reason, t.toString());
         }
 
-        LOG.info("[StartupCleanup] nukeLevel: dim={}, reason={}, removedSouls={}",
+        LOG.debug("[StartupCleanup] nukeLevel: dim={}, reason={}, removedSouls={}",
                 sl.dimension().location(), reason, removedSouls);
 
         return removedSouls;

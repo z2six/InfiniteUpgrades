@@ -119,7 +119,7 @@ public class SoulOrbEntity extends Entity {
 
         if (LOG_SPAWN && !level.isClientSide) {
             var bb = this.getBoundingBox();
-            LOG.info("[SoulOrbEntity] ctor: id={}, tier={}, units={}, permanent={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
+            LOG.debug("[SoulOrbEntity] ctor: id={}, tier={}, units={}, permanent={}, dim={}, pos=({},{},{}), life={}t, AABB=({}, {}, {}, {}), size=({},{})",
                     this.getId(), tier, defaultUnits, (this.lifetime == 0), level.dimension().location(),
                     fmt(pos.x), fmt(pos.y), fmt(pos.z), lifetimeTicks,
                     fmt(bb.minX), fmt(bb.minY), fmt(bb.maxX), fmt(bb.maxY),
@@ -200,7 +200,7 @@ public class SoulOrbEntity extends Entity {
             this.lifetime = Math.max(0, lifetimeTicks);
             this.tickCount = 0; // restart lifetime countdown AND fade math
             if (LOG_SPAWN && !this.level().isClientSide) {
-                LOG.info("[SoulOrbEntity] refreshLifetimeFromNow: id={}, newLifeTicks={}, permanent={}",
+                LOG.debug("[SoulOrbEntity] refreshLifetimeFromNow: id={}, newLifeTicks={}, permanent={}",
                         this.getId(), this.lifetime, (this.lifetime == 0));
             }
         } catch (Throwable t) {
@@ -230,7 +230,7 @@ public class SoulOrbEntity extends Entity {
             // HARD REQUIREMENT #3: if no player is within 30 blocks, instantly nuke.
             if (!isAnyPlayerWithinKeepRadius(sl)) {
                 if (LOG_SPAWN) {
-                    LOG.info("[SoulOrbEntity] OUT-OF-RANGE NUKE: id={}, tier={}, units={}, dim={}, pos=({},{},{}). Removing immediately.",
+                    LOG.debug("[SoulOrbEntity] OUT-OF-RANGE NUKE: id={}, tier={}, units={}, dim={}, pos=({},{},{}). Removing immediately.",
                             this.getId(), getTier(), getStoredUnits(),
                             sl.dimension().location(),
                             fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()));
@@ -240,7 +240,7 @@ public class SoulOrbEntity extends Entity {
             }
 
             if (LOG_TICKS && ((this.tickCount + (int)this.getId()) % LOG_EVERY == 0)) {
-                LOG.info("[SoulOrbEntity] tick: id={}, tier={}, units={}, pos=({},{},{}), dim={}, lifeLeft={}t, permanent={}, homing={}",
+                LOG.debug("[SoulOrbEntity] tick: id={}, tier={}, units={}, pos=({},{},{}), dim={}, lifeLeft={}t, permanent={}, homing={}",
                         this.getId(), getTier(), getStoredUnits(),
                         fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
                         this.level().dimension().location(),
@@ -251,7 +251,7 @@ public class SoulOrbEntity extends Entity {
             // Despawn if lifetime reached (unless permanent)
             if (this.lifetime > 0 && this.tickCount >= this.lifetime) {
                 if (LOG_SPAWN) {
-                    LOG.info("[SoulOrbEntity] LIFETIME DESPAWN: id={}, tier={}, units={}, dim={}, pos=({},{},{}), lifeTicks={}",
+                    LOG.debug("[SoulOrbEntity] LIFETIME DESPAWN: id={}, tier={}, units={}, dim={}, pos=({},{},{}), lifeTicks={}",
                             this.getId(), getTier(), getStoredUnits(),
                             sl.dimension().location(),
                             fmt(this.getX()), fmt(this.getY()), fmt(this.getZ()),
@@ -373,12 +373,12 @@ public class SoulOrbEntity extends Entity {
         if (!stack.isEmpty()) {
             int after = SoulCageItem.addUnits(stack, Math.max(0, getStoredUnits()));
             if (LOG_SPAWN) {
-                LOG.info("[SoulOrbEntity] collected: player={}, units={}, tier={}, newTotal={}",
+                LOG.debug("[SoulOrbEntity] collected: player={}, units={}, tier={}, newTotal={}",
                         player.getScoreboardName(), getStoredUnits(), getTier(), after);
             }
         } else {
             if (LOG_SPAWN) {
-                LOG.info("[SoulOrbEntity] collected but player no longer has a Soul Cage; discarding orb.");
+                LOG.debug("[SoulOrbEntity] collected but player no longer has a Soul Cage; discarding orb.");
             }
         }
 
@@ -390,7 +390,7 @@ public class SoulOrbEntity extends Entity {
         this.hoverBaseY = y;
         // no teleport; let the idle controller steer there smoothly
         if (LOG_SPAWN && !level().isClientSide) {
-            LOG.info("[SoulOrbEntity] setHoverBaseY: id={}, newBaseY={}", this.getId(), fmt(y));
+            LOG.debug("[SoulOrbEntity] setHoverBaseY: id={}, newBaseY={}", this.getId(), fmt(y));
         }
     }
 

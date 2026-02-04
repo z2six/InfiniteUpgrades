@@ -66,7 +66,7 @@ public final class SoulDrops {
             final ResourceLocation entId = victim.getType().builtInRegistryHolder().key().location();
 
             if (LOG_DECISIONS) {
-                LOG.info("[SoulDrops] trigger: dim={}, entity={}, id={}, pos=({},{},{}), bbH={}, maxHP={}",
+                LOG.debug("[SoulDrops] trigger: dim={}, entity={}, id={}, pos=({},{},{}), bbH={}, maxHP={}",
                         dim, victim.getClass().getSimpleName(), entId,
                         fmt(victim.getX()), fmt(victim.getY()), fmt(victim.getZ()),
                         fmt(victim.getBbHeight()), fmt(victim.getMaxHealth()));
@@ -76,23 +76,23 @@ public final class SoulDrops {
             UpgradeServerConfig.SoulsConfig cfg = snap.souls;
 
             if (!cfg.enabled) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: souls disabled");
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: souls disabled");
                 return;
             }
 
             // PvP gating
             if (victim instanceof Player && !cfg.allowPvP) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: victim is player and allowPvP=false");
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: victim is player and allowPvP=false");
                 return;
             }
 
             // Entity whitelist/blacklist
             if (!cfg.whitelist.isEmpty() && !cfg.whitelist.contains(entId)) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: {} not in whitelist", entId);
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: {} not in whitelist", entId);
                 return;
             }
             if (cfg.blacklist.contains(entId)) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: {} is blacklisted", entId);
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: {} is blacklisted", entId);
                 return;
             }
 
@@ -105,7 +105,7 @@ public final class SoulDrops {
             final Vec3 deathPos = victim.position();
             if (!isAnyPlayerWithin(sl, deathPos, PLAYER_NEARBY_RADIUS_SQR)) {
                 if (LOG_DECISIONS) {
-                    LOG.info("[SoulDrops] skip: no player within {} blocks at deathPos=({},{},{}), dim={}",
+                    LOG.debug("[SoulDrops] skip: no player within {} blocks at deathPos=({},{},{}), dim={}",
                             (int)PLAYER_NEARBY_RADIUS, fmt(deathPos.x), fmt(deathPos.y), fmt(deathPos.z), dim);
                 }
                 return;
@@ -115,17 +115,17 @@ public final class SoulDrops {
             RandomSource r = victim.getRandom();
             double roll = r.nextDouble();
             if (LOG_DECISIONS) {
-                LOG.info("[SoulDrops] chance: roll={}, threshold={}", fmt(roll), fmt(cfg.dropChance));
+                LOG.debug("[SoulDrops] chance: roll={}, threshold={}", fmt(roll), fmt(cfg.dropChance));
             }
             if (roll > cfg.dropChance) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: chance roll failed");
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: chance roll failed");
                 return;
             }
 
             // Choose tier
             SoulOrbEntity.Tier tier = selectTier(cfg, victim.getMaxHealth());
             if (tier == null) {
-                if (LOG_DECISIONS) LOG.info("[SoulDrops] skip: no tier matched");
+                if (LOG_DECISIONS) LOG.debug("[SoulDrops] skip: no tier matched");
                 return;
             }
 
@@ -193,7 +193,7 @@ public final class SoulDrops {
                     keep.refreshLifetimeFromNow(lifetimeTicks);
 
                     if (LOG_SUCCESS) {
-                        LOG.info("[SoulDrops] CLUMP-MERGE: dim={}, victimType={}, victimId={}, keptOrbId={}, keepDist2={}, baseTier={}, newUnits={}, mergedExistingOrbs={}, combinedUnits={}, combinedTier={}, lifeTicks={}, dropPos=({},{},{}))",
+                        LOG.debug("[SoulDrops] CLUMP-MERGE: dim={}, victimType={}, victimId={}, keptOrbId={}, keepDist2={}, baseTier={}, newUnits={}, mergedExistingOrbs={}, combinedUnits={}, combinedTier={}, lifeTicks={}, dropPos=({},{},{}))",
                                 dim, entId, victim.getId(),
                                 keep.getId(), fmt(keepDist2),
                                 tier, newUnits,
@@ -203,7 +203,7 @@ public final class SoulDrops {
                     }
 
                     if (LOG_CLUMP_DEBUG) {
-                        LOG.info("[SoulDrops] CLUMP-DEBUG: nearbyBoxCount={}, inSphereCount={}, absorbed={}, keptOrbId={}",
+                        LOG.debug("[SoulDrops] CLUMP-DEBUG: nearbyBoxCount={}, inSphereCount={}, absorbed={}, keptOrbId={}",
                                 nearby.size(), inSphere.size(), absorbedOrbs, keep.getId());
                     }
 
@@ -214,7 +214,7 @@ public final class SoulDrops {
 
             // No merge target: spawn a new orb
             if (LOG_SUCCESS) {
-                LOG.info("[SoulDrops] SPAWN: dim={}, victimId={}, victimType={}, baseTier={}, units={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
+                LOG.debug("[SoulDrops] SPAWN: dim={}, victimId={}, victimType={}, baseTier={}, units={}, lifeTicks={}, spawn=({},{},{}), anchor=({},{},{}), dx={}, dz={}",
                         dim, victim.getId(), entId, tier, newUnits, lifetimeTicks,
                         fmt(at.x), fmt(at.y), fmt(at.z),
                         fmt(anchor.x), fmt(anchor.y), fmt(anchor.z),

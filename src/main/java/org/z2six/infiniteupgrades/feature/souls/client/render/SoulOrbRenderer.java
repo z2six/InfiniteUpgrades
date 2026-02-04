@@ -68,7 +68,7 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         if (LOG_RENDER && ((e.tickCount + (int)e.getId()) % LOG_EVERY == 0)) {
             double dx = e.getX() - camX, dy = e.getY() - camY, dz = e.getZ() - camZ;
             double dist2 = dx*dx + dy*dy + dz*dz;
-            LOG.info("[SoulOrbRenderer] shouldRender: id={}, result={}, cam=({},{},{}), pos=({},{},{}), dist2={}",
+            LOG.debug("[SoulOrbRenderer] shouldRender: id={}, result={}, cam=({},{},{}), pos=({},{},{}), dist2={}",
                     e.getId(), result, fmt(camX), fmt(camY), fmt(camZ),
                     fmt(e.getX()), fmt(e.getY()), fmt(e.getZ()), fmt(dist2));
         }
@@ -87,7 +87,7 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         if (LOG_RENDER && ((orb.tickCount + (int)orb.getId()) % LOG_EVERY == 0)) {
             var cam = Minecraft.getInstance().gameRenderer.getMainCamera();
             var camP = cam.getPosition();
-            LOG.info("[SoulOrbRenderer] render-call: id={}, tier={}, pos=({},{},{}), cam=({},{},{}), baseSize={}, light={}, dim={}",
+            LOG.debug("[SoulOrbRenderer] render-call: id={}, tier={}, pos=({},{},{}), cam=({},{},{}), baseSize={}, light={}, dim={}",
                     orb.getId(), orb.getTier(),
                     fmt(orb.getX()), fmt(orb.getY()), fmt(orb.getZ()),
                     fmt(camP.x), fmt(camP.y), fmt(camP.z),
@@ -176,7 +176,7 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
         HAS_TEX.put(t, present);
 
         if (LOG_RENDER) {
-            LOG.info("[SoulOrbRenderer] texture check: tier={}, rl={}, present={}", t, rl, present);
+            LOG.debug("[SoulOrbRenderer] texture check: tier={}, rl={}, present={}", t, rl, present);
         }
         return present;
     }

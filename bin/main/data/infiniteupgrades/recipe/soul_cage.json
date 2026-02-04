@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "OOO",
+    "OGO",
+    "OOO"
+  ],
+  "key": {
+    "O": { "item": "minecraft:iron_ingot" },
+    "G": { "item": "minecraft:nether_star" }
+  },
+  "result": {
+    "id": "infiniteupgrades:soul_cage",
+    "count": 1
+  }
+}

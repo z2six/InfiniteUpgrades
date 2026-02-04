@@ -53,7 +53,7 @@ public final class ToolSpeedUtil {
             return s.getItem() instanceof DiggerItem;
         } catch (Throwable t) {
             // Never crash the UI / server tick due to tag/mapping oddities; just log once per odd case at info level.
-            LOG.info("[ToolSpeedUtil] isMiningTool failed for {}: {}", safeItemName(s), t.toString());
+            LOG.debug("[ToolSpeedUtil] isMiningTool failed for {}: {}", safeItemName(s), t.toString());
             return false;
         }
     }

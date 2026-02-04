@@ -225,7 +225,7 @@ public final class UpgradeService {
                     double cur = ToolSpeedUtil.getBonus(copy);
                     double next = cur + step;
                     ToolSpeedUtil.setBonus(copy, next);
-                    LOG.info("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={} (finalMult={})",
+                    LOG.debug("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={} (finalMult={})",
                             ritual, fmt(cur), fmt(next), fmt(step), fmt(snap.finalMultiplier(BLOCK_SPEED_ID)));
                 } catch (Throwable t) {
                     LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());

@@ -189,7 +189,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 boolean ok = isUpgradeableItem(stack);
                 if (ok) {
                     if (isMiningTool(stack)) {
-                        LOG.info("[AngelDemonMenu] Accepted mining tool in input: {} ({})",
+                        LOG.debug("[AngelDemonMenu] Accepted mining tool in input: {} ({})",
                                 stack.getItem().toString(), describeToolClass(stack));
                     }
                 }
@@ -214,7 +214,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             }
             @Override public void onTake(Player player, ItemStack stack) {
                 super.onTake(player, stack);
-                LOG.info("[AngelDemonMenu] Player took infused result from output slot");
+                LOG.debug("[AngelDemonMenu] Player took infused result from output slot");
                 withPreviewSuppressed(() -> baseInv.setItem(2, ItemStack.EMPTY));
                 syncToClient("onTake result");
                 updatePreview();

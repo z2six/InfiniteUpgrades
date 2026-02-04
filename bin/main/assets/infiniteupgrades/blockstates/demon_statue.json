@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "infiniteupgrades:block/demon_statue" },
+    "facing=south": { "model": "infiniteupgrades:block/demon_statue", "y": 180 },
+    "facing=west":  { "model": "infiniteupgrades:block/demon_statue", "y": 270 },
+    "facing=east":  { "model": "infiniteupgrades:block/demon_statue", "y": 90 }
+  }
+}
