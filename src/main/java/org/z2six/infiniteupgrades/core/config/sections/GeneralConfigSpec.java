@@ -3,7 +3,7 @@ package org.z2six.infiniteupgrades.core.config.sections;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.UpgradeMode;
@@ -16,12 +16,12 @@ import java.util.List;
 public final class GeneralConfigSpec {
     private static final Logger LOG = LogUtils.getLogger();
 
-    public final ModConfigSpec.IntValue maxLevel;
-    public final ModConfigSpec.EnumValue<UpgradeMode> upgradeMode;
+    public final ForgeConfigSpec.IntValue maxLevel;
+    public final ForgeConfigSpec.EnumValue<UpgradeMode> upgradeMode;
 
-    public final ModConfigSpec.ConfigValue<List<? extends String>> nameColorRules;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> nameColorRules;
 
-    private GeneralConfigSpec(ModConfigSpec.Builder B) {
+    private GeneralConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("general");
 
         maxLevel = B.comment(
@@ -51,7 +51,7 @@ public final class GeneralConfigSpec {
         B.pop();
     }
 
-    public static GeneralConfigSpec define(ModConfigSpec.Builder B) {
+    public static GeneralConfigSpec define(ForgeConfigSpec.Builder B) {
         return new GeneralConfigSpec(B);
     }
 

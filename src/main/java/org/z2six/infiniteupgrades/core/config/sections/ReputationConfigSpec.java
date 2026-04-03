@@ -1,7 +1,7 @@
 // File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/ReputationConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 
 import static org.z2six.infiniteupgrades.core.config.ConfigParsing.clamp01;
 
@@ -24,16 +24,16 @@ import static org.z2six.infiniteupgrades.core.config.ConfigParsing.clamp01;
  */
 public final class ReputationConfigSpec {
 
-    public final ModConfigSpec.IntValue    repMax;
-    public final ModConfigSpec.DoubleValue repDeltaSuccess;
-    public final ModConfigSpec.DoubleValue repDeltaFail;
-    public final ModConfigSpec.DoubleValue repBonusPerPoint;
-    public final ModConfigSpec.DoubleValue repBonusClamp;
+    public final ForgeConfigSpec.IntValue    repMax;
+    public final ForgeConfigSpec.DoubleValue repDeltaSuccess;
+    public final ForgeConfigSpec.DoubleValue repDeltaFail;
+    public final ForgeConfigSpec.DoubleValue repBonusPerPoint;
+    public final ForgeConfigSpec.DoubleValue repBonusClamp;
 
     /** NEW: Scale factor applied to the *opposite-side* penalty (0..1). Example: 0.5 ⇒ half malus. */
-    public final ModConfigSpec.DoubleValue oppositePenaltyFactor;
+    public final ForgeConfigSpec.DoubleValue oppositePenaltyFactor;
 
-    private ReputationConfigSpec(ModConfigSpec.Builder B) {
+    private ReputationConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("reputation");
 
         repMax = B.comment(
@@ -111,7 +111,7 @@ public final class ReputationConfigSpec {
         B.pop();
     }
 
-    public static ReputationConfigSpec define(ModConfigSpec.Builder B) {
+    public static ReputationConfigSpec define(ForgeConfigSpec.Builder B) {
         return new ReputationConfigSpec(B);
     }
 

@@ -1,31 +1,23 @@
-// File: src/main/java/org/z2six/infiniteupgrades/core/registry/ModSounds.java
 package org.z2six.infiniteupgrades.core.registry;
 
-import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
-import net.neoforged.neoforge.registries.DeferredHolder;
-import net.neoforged.neoforge.registries.DeferredRegister;
+import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraftforge.registries.RegistryObject;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 
-/**
- * Registers mod SoundEvents so they exist in the registry on the client.
- */
 public final class ModSounds {
-    // File path: src/main/java/org/z2six/infiniteupgrades/registry/ModSounds.java
-
     private ModSounds() {}
 
     public static final DeferredRegister<SoundEvent> SOUND_EVENTS =
-            DeferredRegister.create(Registries.SOUND_EVENT, Infiniteupgrades.MODID);
+            DeferredRegister.create(ForgeRegistries.SOUND_EVENTS, Infiniteupgrades.MODID);
 
-    public static final DeferredHolder<SoundEvent, SoundEvent> INFUSE_SUCCESS =
+    public static final RegistryObject<SoundEvent> INFUSE_SUCCESS =
             SOUND_EVENTS.register("infuse_success",
-                    () -> SoundEvent.createVariableRangeEvent(
-                            ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "infuse_success")));
+                    () -> SoundEvent.createVariableRangeEvent(new ResourceLocation(Infiniteupgrades.MODID, "infuse_success")));
 
-    public static final DeferredHolder<SoundEvent, SoundEvent> INFUSE_FAIL =
+    public static final RegistryObject<SoundEvent> INFUSE_FAIL =
             SOUND_EVENTS.register("infuse_fail",
-                    () -> SoundEvent.createVariableRangeEvent(
-                            ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "infuse_fail")));
+                    () -> SoundEvent.createVariableRangeEvent(new ResourceLocation(Infiniteupgrades.MODID, "infuse_fail")));
 }

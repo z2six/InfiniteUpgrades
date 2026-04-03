@@ -4,7 +4,7 @@ package org.z2six.infiniteupgrades.feature.infusion.logic;
 import com.mojang.logging.LogUtils;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
 import org.slf4j.Logger;
 
 /**

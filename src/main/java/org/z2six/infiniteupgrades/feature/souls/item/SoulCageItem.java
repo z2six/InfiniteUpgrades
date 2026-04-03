@@ -3,21 +3,21 @@ package org.z2six.infiniteupgrades.feature.souls.item;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-import net.minecraft.world.item.component.CustomData;
-import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
+import net.minecraft.world.level.Level;
+import net.minecraftforge.client.extensions.common.IClientItemExtensions;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 import software.bernie.geckolib.animatable.GeoItem;
-import software.bernie.geckolib.animatable.instance.AnimatableInstanceCache;
-import software.bernie.geckolib.animation.AnimatableManager;
+import software.bernie.geckolib.core.animatable.instance.AnimatableInstanceCache;
+import software.bernie.geckolib.core.animation.AnimatableManager;
 import software.bernie.geckolib.util.GeckoLibUtil;
 
 import java.util.List;
@@ -60,23 +60,20 @@ public class SoulCageItem extends Item implements GeoItem {
     // ----- Storage helpers -----
     public static int getTotal(@NotNull ItemStack stack) {
         if (stack.isEmpty()) return 0;
-        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
-        if (data == null) return 0;
-        CompoundTag tag = data.copyTag();
+        CompoundTag tag = StackTagUtil.getTagCopy(stack);
         return Math.max(0, tag.getInt(NBT_TOTAL));
     }
 
     public static int addUnits(@NotNull ItemStack stack, int delta) {
         if (stack.isEmpty() || delta <= 0) return getTotal(stack);
 
-        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
-        CompoundTag tag = (data != null) ? data.copyTag() : new CompoundTag();
+        CompoundTag tag = StackTagUtil.getTagCopy(stack);
 
         int now = Math.max(0, tag.getInt(NBT_TOTAL));
         int next = Math.max(0, now + delta);
         tag.putInt(NBT_TOTAL, next);
 
-        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+        stack.setTag(tag);
         return next;
     }
 
@@ -111,8 +108,7 @@ public class SoulCageItem extends Item implements GeoItem {
         }
 
         try {
-            CustomData data = stack.get(DataComponents.CUSTOM_DATA);
-            CompoundTag tag = (data != null) ? data.copyTag() : new CompoundTag();
+            CompoundTag tag = StackTagUtil.getTagCopy(stack);
 
             int current = Math.max(0, tag.getInt(NBT_TOTAL));
             if (current < units) {
@@ -122,7 +118,7 @@ public class SoulCageItem extends Item implements GeoItem {
 
             int remaining = current - units;
             tag.putInt(NBT_TOTAL, remaining);
-            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+            stack.setTag(tag);
 
             LOG.debug("[SoulCageItem] Consumed {} souls from cage; now remaining={}", units, remaining);
             return true;
@@ -153,13 +149,13 @@ public class SoulCageItem extends Item implements GeoItem {
 
     @Override
     public void appendHoverText(ItemStack stack,
-                                @Nullable Item.TooltipContext ctx,
+                                @Nullable Level level,
                                 List<Component> tooltip,
                                 TooltipFlag flags) {
         int total = getTotal(stack);
         tooltip.add(Component.translatable("item.infiniteupgrades.soul_cage.total",
                         Component.literal(String.valueOf(total)).withStyle(ChatFormatting.AQUA))
                 .withStyle(ChatFormatting.GRAY));
-        super.appendHoverText(stack, ctx, tooltip, flags);
+        super.appendHoverText(stack, level, tooltip, flags);
     }
 }

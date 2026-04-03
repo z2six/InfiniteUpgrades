@@ -2,7 +2,7 @@
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import net.minecraft.resources.ResourceLocation;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 import org.jetbrains.annotations.Nullable;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.Direction;
@@ -24,7 +24,7 @@ import java.util.*;
 public final class AttributesConfigSpec {
 
     // Lines that define additional rules (or override built-ins) in a simple one-line format
-    public final ModConfigSpec.ConfigValue<List<? extends String>> customAttrRules;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> customAttrRules;
 
     // Built-in sections for common attributes (as easy starting points)
     private final AttributeSection ATTACK_DAMAGE;
@@ -33,7 +33,7 @@ public final class AttributesConfigSpec {
     private final AttributeSection ARMOR_TOUGHNESS;
     private final AttributeSection KNOCKBACK_RESISTANCE;
 
-    private AttributesConfigSpec(ModConfigSpec.Builder B) {
+    private AttributesConfigSpec(ForgeConfigSpec.Builder B) {
         // ====== Built-in examples / defaults ======
         ATTACK_DAMAGE = new AttributeSection(B, "minecraft", "generic", "attack_damage",
                 true, 10, Direction.INCREASE, StepType.PERCENT, 0.05,
@@ -94,7 +94,7 @@ public final class AttributesConfigSpec {
         B.pop();
     }
 
-    public static AttributesConfigSpec define(ModConfigSpec.Builder B) {
+    public static AttributesConfigSpec define(ForgeConfigSpec.Builder B) {
         return new AttributesConfigSpec(B);
     }
 
@@ -127,18 +127,18 @@ public final class AttributesConfigSpec {
         private final String grp;
         private final String name;
 
-        private final ModConfigSpec.BooleanValue enabled;
-        private final ModConfigSpec.IntValue weight;
-        private final ModConfigSpec.EnumValue<Direction> direction;
-        private final ModConfigSpec.EnumValue<StepType> stepType;
-        private final ModConfigSpec.DoubleValue defaultStep;
-        private final ModConfigSpec.ConfigValue<List<? extends String>> perLevelOverrides;
-        private final ModConfigSpec.DoubleValue capMin;
-        private final ModConfigSpec.DoubleValue capMax;
-        private final ModConfigSpec.BooleanValue applyToMagnitude;
-        private final ModConfigSpec.DoubleValue rounding;
+        private final ForgeConfigSpec.BooleanValue enabled;
+        private final ForgeConfigSpec.IntValue weight;
+        private final ForgeConfigSpec.EnumValue<Direction> direction;
+        private final ForgeConfigSpec.EnumValue<StepType> stepType;
+        private final ForgeConfigSpec.DoubleValue defaultStep;
+        private final ForgeConfigSpec.ConfigValue<List<? extends String>> perLevelOverrides;
+        private final ForgeConfigSpec.DoubleValue capMin;
+        private final ForgeConfigSpec.DoubleValue capMax;
+        private final ForgeConfigSpec.BooleanValue applyToMagnitude;
+        private final ForgeConfigSpec.DoubleValue rounding;
 
-        AttributeSection(ModConfigSpec.Builder B, String namespace, String group, String name,
+        AttributeSection(ForgeConfigSpec.Builder B, String namespace, String group, String name,
                          boolean defEnabled, int defWeight, Direction defDir,
                          StepType defStepType, double defStep,
                          List<String> defOverrides, double defMin, double defMax,

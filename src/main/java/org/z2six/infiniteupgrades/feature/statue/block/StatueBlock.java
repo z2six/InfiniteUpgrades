@@ -8,7 +8,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -28,6 +27,7 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraftforge.network.NetworkHooks;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
 import org.z2six.infiniteupgrades.feature.infusion.menu.AngelDemonMenu;
@@ -92,28 +92,14 @@ public class StatueBlock extends Block {
         return PEDESTAL;
     }
 
-    // -------------------- 1.21.x interaction wiring --------------------
-
-    /** Right-click with empty hand (or when the held item doesn't handle the click). */
     @Override
-    public InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hit) {
-        LOG.debug("[StatueBlock] useWithoutItem kind={} pos={} sideClient={}", kind, pos, level.isClientSide);
-        return handleOpen(level, pos, player);
-    }
-
-    /** Right-click while holding an item (new 1.21 API signature). */
-    @Override
-    public ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
-                                           Player player, InteractionHand hand, BlockHitResult hit) {
+    public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hit) {
         try {
-            LOG.debug("[StatueBlock] useItemOn kind={} pos={} hand={} sideClient={}", kind, pos, hand, level.isClientSide);
-            InteractionResult res = handleOpen(level, pos, player);
-            return res.consumesAction()
-                    ? ItemInteractionResult.SUCCESS
-                    : ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+            LOG.debug("[StatueBlock] use kind={} pos={} hand={} sideClient={}", kind, pos, hand, level.isClientSide);
+            return handleOpen(level, pos, player);
         } catch (Throwable t) {
-            LOG.error("[StatueBlock] useItemOn failed: {}", t.toString());
-            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+            LOG.error("[StatueBlock] use failed: {}", t.toString());
+            return InteractionResult.PASS;
         }
     }
 
@@ -151,7 +137,7 @@ public class StatueBlock extends Block {
             );
 
             // Write SAME order the client reads: pos then ritual ordinal
-            sp.openMenu(provider, buf -> {
+            NetworkHooks.openScreen(sp, provider, buf -> {
                 try {
                     buf.writeBlockPos(pos);
                     buf.writeVarInt(ritual.ordinal());

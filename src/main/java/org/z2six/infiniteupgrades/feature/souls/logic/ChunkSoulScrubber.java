@@ -5,7 +5,7 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
-import net.neoforged.neoforge.event.level.ChunkDataEvent;
+import net.minecraftforge.event.level.ChunkDataEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 

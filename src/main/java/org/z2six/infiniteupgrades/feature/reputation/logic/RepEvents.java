@@ -3,7 +3,7 @@
 package org.z2six.infiniteupgrades.feature.reputation.logic;
 
 import com.mojang.logging.LogUtils;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
 import org.slf4j.Logger;
 
 /**

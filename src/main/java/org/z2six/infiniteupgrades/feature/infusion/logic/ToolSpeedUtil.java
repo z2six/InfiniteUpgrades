@@ -2,14 +2,13 @@
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.DiggerItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.Items;
 import net.minecraft.tags.ItemTags;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 
 import java.util.Locale;
 
@@ -68,9 +67,7 @@ public final class ToolSpeedUtil {
     public static double getBonus(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return 0.0;
         try {
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return 0.0;
-            CompoundTag root = cd.copyTag();
+            CompoundTag root = StackTagUtil.getTagCopy(stack);
             if (!root.contains(KEY_TOOL_SPEED_BONUS)) return 0.0;
             double v = root.getDouble(KEY_TOOL_SPEED_BONUS);
             if (Double.isNaN(v) || Double.isInfinite(v)) return 0.0;
@@ -91,13 +88,7 @@ public final class ToolSpeedUtil {
         if (stack == null || stack.isEmpty()) return;
         try {
             double v = sanitizeFraction(fraction);
-
-            CustomData cd = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-            CustomData updated = cd.update(tag -> {
-                // Keep the value top-level (consistent with our other preview keys), not inside iu_upgrade.
-                tag.putDouble(KEY_TOOL_SPEED_BONUS, v);
-            });
-            stack.set(DataComponents.CUSTOM_DATA, updated);
+            StackTagUtil.updateTag(stack, tag -> tag.putDouble(KEY_TOOL_SPEED_BONUS, v));
 
             LOG.debug("[ToolSpeedUtil] setBonus {} -> {}", safeItemName(stack), fmtPct(v));
         } catch (Throwable t) {

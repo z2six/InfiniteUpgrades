@@ -8,15 +8,14 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.CustomData;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.view.DetailsPanelView;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.view.MainGuiView;
@@ -222,7 +221,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
 
     @Override
     public void render(GuiGraphics gg, int mouseX, int mouseY, float partialTick) {
-        this.renderBackground(gg, mouseX, mouseY, partialTick);
+        this.renderBackground(gg);
 
         // Tooltip routing for preview item
         Slot hoveredBefore = this.hoveredSlot;
@@ -273,14 +272,12 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
         // no vanilla labels
     }
 
-    // --- Mouse handling (1.21.x uses 4-arg mouseScrolled) ---
-
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
-        if (detailsView != null && detailsView.mouseScrolled(mouseX, mouseY, deltaY)) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (detailsView != null && detailsView.mouseScrolled(mouseX, mouseY, delta)) {
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, deltaX, deltaY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override
@@ -387,9 +384,7 @@ public class AngelDemonScreen extends AbstractContainerScreen<AngelDemonMenu> {
     private static boolean isPreview(ItemStack stack) {
         try {
             if (stack.isEmpty()) return false;
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return false;
-            return cd.copyTag().getBoolean("iu_preview");
+            return StackTagUtil.getTagCopy(stack).getBoolean("iu_preview");
         } catch (Throwable ignored) {
             return false;
         }

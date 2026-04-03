@@ -1,141 +1,106 @@
-// MainFile: src/main/java/org/z2six/infiniteupgrades/core/Infiniteupgrades.java
 package org.z2six.infiniteupgrades.core;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.client.Minecraft;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.IEventBus;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
-import net.neoforged.fml.loading.FMLEnvironment;
-import net.neoforged.neoforge.client.event.EntityRenderersEvent;
-import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
-import net.neoforged.neoforge.common.NeoForge;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.BuildCreativeModeTabContentsEvent;
+import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.server.ServerAboutToStartEvent;
+import net.minecraftforge.event.server.ServerStartingEvent;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.ModLoadingContext;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
+import net.minecraftforge.registries.RegistryObject;
 import org.slf4j.Logger;
-
 import org.z2six.infiniteupgrades.core.config.UpgradeClientConfig;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.core.registry.ModBlockEntities;
 import org.z2six.infiniteupgrades.core.registry.ModBlocks;
 import org.z2six.infiniteupgrades.core.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
 import org.z2six.infiniteupgrades.core.registry.ModSounds;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
-import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientTicker;
-import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScreen;
+import org.z2six.infiniteupgrades.feature.infusion.logic.BreakSpeedHooks;
+import org.z2six.infiniteupgrades.feature.infusion.logic.InfuseTimers;
 import org.z2six.infiniteupgrades.feature.reputation.commands.RepCommands;
 import org.z2six.infiniteupgrades.feature.reputation.logic.RepEvents;
-import org.z2six.infiniteupgrades.feature.souls.client.render.SoulOrbRenderer;
 import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
-
-// NEW: souls logic registrations (no EventBusSubscriber)
 import org.z2six.infiniteupgrades.feature.souls.logic.ChunkSoulScrubber;
 import org.z2six.infiniteupgrades.feature.souls.logic.SoulDrops;
 import org.z2six.infiniteupgrades.feature.souls.logic.StartupCleanup;
 
 @Mod(Infiniteupgrades.MODID)
 public class Infiniteupgrades {
-
     public static final String MODID = "infiniteupgrades";
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    public static final net.neoforged.neoforge.registries.DeferredRegister.Blocks BLOCKS =
-            net.neoforged.neoforge.registries.DeferredRegister.createBlocks(MODID);
-    public static final net.neoforged.neoforge.registries.DeferredRegister.Items ITEMS =
-            net.neoforged.neoforge.registries.DeferredRegister.createItems(MODID);
-    public static final net.neoforged.neoforge.registries.DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
-            net.neoforged.neoforge.registries.DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
+    public static final DeferredRegister<Item> ITEMS =
+            DeferredRegister.create(ForgeRegistries.ITEMS, MODID);
 
-    // --- Soul Cage item ---
-    public static final net.neoforged.neoforge.registries.DeferredItem<Item> SOUL_CAGE = ITEMS.register("soul_cage",
+    public static final RegistryObject<Item> SOUL_CAGE = ITEMS.register("soul_cage",
             () -> new SoulCageItem(new Item.Properties().stacksTo(1)));
 
-    public Infiniteupgrades(IEventBus modEventBus, ModContainer modContainer) {
-        // Core mod registries
-        BLOCKS.register(modEventBus);
+    public Infiniteupgrades() {
+        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+
         ITEMS.register(modEventBus);
-        CREATIVE_MODE_TABS.register(modEventBus);
-
-        // Statues (separate registry holder)
         ModBlocks.BLOCKS.register(modEventBus);
-        ModBlocks.ITEMS.register(modEventBus); // <-- IMPORTANT: register the BlockItems too
-
-        // Other module registries
+        ModBlocks.ITEMS.register(modEventBus);
         ModBlockEntities.BLOCK_ENTITIES.register(modEventBus);
         ModMenus.MENUS.register(modEventBus);
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
-        ModAttachments.register(modEventBus);
         ModSounds.SOUND_EVENTS.register(modEventBus);
+        ModAttachments.register(modEventBus);
 
-        // Creative tabs
         modEventBus.addListener(this::addCreative);
-
-        // GAME bus listeners
-        NeoForge.EVENT_BUS.register(this);
-        try {
-            NeoForge.EVENT_BUS.addListener(RepEvents::onPlayerClone);
-            NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.InfuseTimers::onLevelTick);
-            NeoForge.EVENT_BUS.addListener(RepCommands::register);
-
-            // NEW: multiply mining speed by our "block_speed" bonus
-            NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.BreakSpeedHooks::onBreakSpeed);
-
-            // -------------------- SOULS: HARD REQUIREMENTS REGISTRATION --------------------
-            // #1B: scrub legacy saved souls out of chunk NBT during chunk load
-            NeoForge.EVENT_BUS.addListener(ChunkSoulScrubber::onChunkDataLoad);
-
-            // #1 (loaded chunks): cleanup on server start + level load (belt & suspenders)
-            NeoForge.EVENT_BUS.addListener(StartupCleanup::onServerStarted);
-            NeoForge.EVENT_BUS.addListener(StartupCleanup::onLevelLoad);
-
-            // #2/#4: drop gating + clumping
-            NeoForge.EVENT_BUS.addListener(SoulDrops::onLivingDrops);
-
-            LOGGER.info("[Infiniteupgrades] Registered souls listeners (ChunkSoulScrubber, StartupCleanup, SoulDrops)");
-            // -------------------------------------------------------------------------------
-        } catch (Throwable t) {
-            LOGGER.error("[Infiniteupgrades] Failed to register game listeners", t);
-        }
-
-        // Configs
-        modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.COMMON, Config.SPEC);
-        modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
-        modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.CLIENT, UpgradeClientConfig.SPEC);
         modEventBus.addListener(UpgradeServerConfig::onServerConfigReload);
         modEventBus.addListener(UpgradeClientConfig::onClientConfigReload);
 
+        MinecraftForge.EVENT_BUS.register(this);
+        MinecraftForge.EVENT_BUS.addListener(RepEvents::onPlayerClone);
+        MinecraftForge.EVENT_BUS.addListener(InfuseTimers::onLevelTick);
+        MinecraftForge.EVENT_BUS.addListener(RepCommands::register);
+        MinecraftForge.EVENT_BUS.addListener(BreakSpeedHooks::onBreakSpeed);
+        MinecraftForge.EVENT_BUS.addListener(ChunkSoulScrubber::onChunkDataLoad);
+        MinecraftForge.EVENT_BUS.addListener(StartupCleanup::onServerStarted);
+        MinecraftForge.EVENT_BUS.addListener(StartupCleanup::onLevelLoad);
+        MinecraftForge.EVENT_BUS.addListener(SoulDrops::onLivingDrops);
+
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, UpgradeServerConfig.SPEC);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, UpgradeClientConfig.SPEC);
+
+        ModNet.init();
         LOGGER.debug("[Infiniteupgrades] Mod constructed");
     }
 
-    private void addCreative(net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
+    private void addCreative(BuildCreativeModeTabContentsEvent event) {
         try {
-            if (event.getTabKey() == CreativeModeTabs.BUILDING_BLOCKS) {
-                // pass ItemLike, not the holder
+            if (CreativeModeTabs.BUILDING_BLOCKS.equals(event.getTabKey())) {
                 event.accept(ModBlocks.ANGEL_STATUE_ITEM.get());
                 event.accept(ModBlocks.DEMON_STATUE_ITEM.get());
+                LOGGER.debug("[Infiniteupgrades] Added statue items to BUILDING_BLOCKS");
             }
-            if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
+            if (CreativeModeTabs.TOOLS_AND_UTILITIES.equals(event.getTabKey())) {
                 event.accept(SOUL_CAGE.get());
+                LOGGER.debug("[Infiniteupgrades] Added soul cage to TOOLS_AND_UTILITIES");
             }
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Creative tab add failed", t);
         }
     }
 
-    // ---------- Server lifecycle (force serverconfig to be created early) ----------
-
     @SubscribeEvent
-    public void onServerAboutToStart(net.neoforged.neoforge.event.server.ServerAboutToStartEvent event) {
+    public void onServerAboutToStart(ServerAboutToStartEvent event) {
         try {
-            // Forces the SERVER config to load and be written into <world>/serverconfig/
-            org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.snapshot();
+            UpgradeServerConfig.snapshot();
             LOGGER.info("[Infiniteupgrades] ServerAboutToStart: ensured server config is loaded/written");
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to pre-load server config", t);
@@ -143,42 +108,12 @@ public class Infiniteupgrades {
     }
 
     @SubscribeEvent
-    public void onServerStarting(net.neoforged.neoforge.event.server.ServerStartingEvent event) {
+    public void onServerStarting(ServerStartingEvent event) {
         LOGGER.info("[Infiniteupgrades] Server starting");
         try {
-            // Harmless if called twice; guarantees presence even on odd loaders
-            org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.snapshot();
+            UpgradeServerConfig.snapshot();
         } catch (Throwable t) {
             LOGGER.error("[Infiniteupgrades] Failed to load server config on start", t);
-        }
-    }
-
-    // ---- CLIENT ----
-    @EventBusSubscriber(modid = MODID, value = Dist.CLIENT)
-    public static class Client {
-        @SubscribeEvent
-        public static void clientSetup(FMLClientSetupEvent evt) {
-            LOGGER.info("[InfiniteUpgrades] Client setup; user={}", Minecraft.getInstance().getUser().getName());
-            NeoForge.EVENT_BUS.addListener(InfuseClientTicker::onClientTick);
-        }
-
-        @SubscribeEvent
-        public static void registerScreens(RegisterMenuScreensEvent evt) {
-            try {
-                evt.register(ModMenus.ANGEL_MENU.get(), AngelDemonScreen::new);
-            } catch (Throwable t) {
-                LogUtils.getLogger().error("[InfiniteUpgrades] Failed to register AngelDemonScreen", t);
-            }
-        }
-
-        @SubscribeEvent
-        public static void registerRenderers(final EntityRenderersEvent.RegisterRenderers evt) {
-            try {
-                // Only Soul Orb renderer (Angel/Demon entities intentionally removed)
-                evt.registerEntityRenderer(ModEntityTypes.SOUL_ORB.get(), SoulOrbRenderer::new);
-            } catch (Throwable t) {
-                LogUtils.getLogger().error("[InfiniteUpgrades] Failed to register entity renderers", t);
-            }
         }
     }
 }

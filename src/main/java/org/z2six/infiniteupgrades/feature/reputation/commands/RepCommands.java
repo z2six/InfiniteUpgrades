@@ -8,7 +8,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.RegisterCommandsEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.reputation.logic.Reputation;

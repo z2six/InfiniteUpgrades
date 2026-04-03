@@ -5,8 +5,6 @@ import org.z2six.infiniteupgrades.feature.souls.item.SoulCageItem;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Holder;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
@@ -22,14 +20,13 @@ import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.*;
-import net.minecraft.world.item.component.CustomData;
-import net.minecraft.world.item.component.ItemAttributeModifiers;
-import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.core.net.ModNet;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
+import org.z2six.infiniteupgrades.core.util.ItemAttributeHelper;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientEffects;
 import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
@@ -62,7 +59,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     public static final int BUTTON_INFUSE = 0;
 
-    private static final Set<Holder<Attribute>> COMBAT_ATTRS = Set.of(
+    private static final Set<Attribute> COMBAT_ATTRS = Set.of(
             Attributes.ATTACK_DAMAGE,
             Attributes.ATTACK_SPEED,
             Attributes.ARMOR,
@@ -570,37 +567,25 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             double factor = 1.0 + step;
 
             ItemStack preview = in.copy();
+            java.util.List<ItemAttributeHelper.Entry> currentEntries = ItemAttributeHelper.getCurrentEntries(preview);
+            java.util.List<ItemAttributeHelper.Entry> sourceEntries = currentEntries.isEmpty()
+                    ? ItemAttributeHelper.getDefaultEntries(preview)
+                    : currentEntries;
+            java.util.List<ItemAttributeHelper.Entry> rewrittenEntries = new java.util.ArrayList<>(sourceEntries.size());
 
-            ItemAttributeModifiers cur = preview.getAttributeModifiers();
-            ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
-
-            for (Entry e : cur.modifiers()) {
-                Holder<Attribute> attr = e.attribute();
+            for (ItemAttributeHelper.Entry e : sourceEntries) {
+                Attribute attr = e.attribute();
                 AttributeModifier mod = e.modifier();
                 if (!isCombatAttr(attr) || mod == null) {
-                    builder.add(attr, mod, e.slot());
+                    rewrittenEntries.add(e);
                     continue;
                 }
-                double scaled = mod.amount() * factor;
-                AttributeModifier scaledMod = new AttributeModifier(mod.id(), scaled, mod.operation());
-                builder.add(attr, scaledMod, e.slot());
+                double scaled = mod.getAmount() * factor;
+                AttributeModifier scaledMod = new AttributeModifier(mod.getId(), mod.getName(), scaled, mod.getOperation());
+                rewrittenEntries.add(new ItemAttributeHelper.Entry(attr, e.attributeId(), scaledMod, e.slot()));
             }
 
-            if (cur.modifiers().isEmpty()) {
-                ItemAttributeModifiers def = preview.getItem().getDefaultAttributeModifiers(preview);
-                for (Entry e : def.modifiers()) {
-                    Holder<Attribute> attr = e.attribute();
-                    AttributeModifier mod = e.modifier();
-                    if (!isCombatAttr(attr) || mod == null) {
-                        builder.add(attr, mod, e.slot());
-                    } else {
-                        double scaled = mod.amount() * factor;
-                        builder.add(attr, new AttributeModifier(mod.id(), scaled, mod.operation()), e.slot());
-                    }
-                }
-            }
-
-            preview.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
+            ItemAttributeHelper.writeEntries(preview, rewrittenEntries);
 
             try {
                 if (isMiningTool(in)) {
@@ -617,12 +602,10 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 LOG.error("[AngelDemonMenu] updatePreview: tool_speed_bonus preview write failed: {}", t.toString());
             }
 
-            CustomData cd = preview.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-            CustomData updated = cd.update(tag -> {
+            StackTagUtil.updateTag(preview, tag -> {
                 tag.putBoolean("iu_preview", true);
                 tag.putDouble("iu_step", step);
             });
-            preview.set(DataComponents.CUSTOM_DATA, updated);
 
             withPreviewSuppressed(() -> baseInv.setItem(2, preview));
         } catch (Throwable t) {
@@ -656,11 +639,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     public void serverPullResultFromAttachment() {
         if (owner == null || owner.level().isClientSide) return;
 
-        var type = (ritual == RitualType.ANGEL)
-                ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
-                : ModAttachments.DEMON_RITUAL_SLOTS.get();
-
-        var saved = owner.getData(type);
+        var saved = ModAttachments.get(owner, ritual);
         if (saved == null) return;
 
         withPreviewSuppressed(() -> {
@@ -677,37 +656,32 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private static boolean isPreview(ItemStack stack) {
         try {
             if (stack.isEmpty()) return false;
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return false;
-            return cd.copyTag().getBoolean("iu_preview");
+            return StackTagUtil.getTagCopy(stack).getBoolean("iu_preview");
         } catch (Throwable ignored) { return false; }
     }
 
     private static void clearPreviewTags(ItemStack stack) {
         try {
             if (stack.isEmpty()) return;
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd == null) return;
-            CustomData cleaned = cd.update(tag -> {
+            StackTagUtil.updateTag(stack, tag -> {
                 tag.remove("iu_preview");
                 tag.remove("iu_step");
             });
-            stack.set(DataComponents.CUSTOM_DATA, cleaned);
         } catch (Throwable t) {
             LOG.error("[AngelDemonMenu] clearPreviewTags failed", t);
         }
     }
 
-    private static boolean isCombatAttr(Holder<Attribute> attr) {
+    private static boolean isCombatAttr(Attribute attr) {
         return attr != null && COMBAT_ATTRS.contains(attr);
     }
 
-    private static boolean hasCombatAttributes(@Nullable ItemAttributeModifiers mods) {
+    private static boolean hasCombatAttributes(@Nullable java.util.List<ItemAttributeHelper.Entry> mods) {
         if (mods == null) return false;
-        for (Entry e : mods.modifiers()) {
-            Holder<Attribute> a = e.attribute();
+        for (ItemAttributeHelper.Entry e : mods) {
+            Attribute a = e.attribute();
             AttributeModifier m = e.modifier();
-            if (isCombatAttr(a) && m != null && Math.abs(m.amount()) > 1.0E-4) return true;
+            if (isCombatAttr(a) && m != null && Math.abs(m.getAmount()) > 1.0E-4) return true;
         }
         return false;
     }
@@ -723,9 +697,8 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
     private static boolean isCombatItemLegacy(ItemStack stack) {
         if (stack.isEmpty()) return false;
         try {
-            if (hasCombatAttributes(stack.getAttributeModifiers())) return true;
-            ItemAttributeModifiers defs = stack.getItem().getDefaultAttributeModifiers(stack);
-            if (hasCombatAttributes(defs)) return true;
+            if (hasCombatAttributes(ItemAttributeHelper.getCurrentEntries(stack))) return true;
+            if (hasCombatAttributes(ItemAttributeHelper.getDefaultEntries(stack))) return true;
             Item it = stack.getItem();
             if (it instanceof ArmorItem) return true;
             if (it instanceof SwordItem) return true;
@@ -757,13 +730,10 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     private static int readLevelFromTagOrName(ItemStack stack) {
         try {
-            CustomData cd = stack.get(DataComponents.CUSTOM_DATA);
-            if (cd != null) {
-                var root = cd.copyTag().getCompound("iu_upgrade");
-                if (root.contains("level", net.minecraft.nbt.Tag.TAG_INT)) {
-                    int lvl = root.getInt("level");
-                    return Mth.clamp(lvl, 0, 10000);
-                }
+            var root = StackTagUtil.getTagCopy(stack).getCompound("iu_upgrade");
+            if (root.contains("level", net.minecraft.nbt.Tag.TAG_INT)) {
+                int lvl = root.getInt("level");
+                return Mth.clamp(lvl, 0, 10000);
             }
         } catch (Throwable ignored) {}
         try {
@@ -776,15 +746,11 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     private void persistSlotsToAttachmentServer() {
         if (owner == null || owner.level().isClientSide) return;
-        var type = (ritual == RitualType.ANGEL)
-                ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
-                : ModAttachments.DEMON_RITUAL_SLOTS.get();
-
         ItemStack s0 = baseInv.getItem(0).copy();
         ItemStack s1 = baseInv.getItem(1).copy();
         ItemStack s2 = baseInv.getItem(2).copy();
         if (isPreview(s2)) s2 = ItemStack.EMPTY;
-        owner.setData(type, new ModAttachments.RitualSlots(s0, s1, s2));
+        ModAttachments.set(owner, ritual, new ModAttachments.RitualSlots(s0, s1, s2));
         LOG.debug("[AngelDemonMenu] Persisted ritual slots to attachment ({})", ritual);
     }
 
@@ -837,10 +803,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
 
     private void loadSlotsFromAttachmentServer() {
         if (owner == null || owner.level().isClientSide) return;
-        var type = (ritual == RitualType.ANGEL)
-                ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
-                : ModAttachments.DEMON_RITUAL_SLOTS.get();
-        ModAttachments.RitualSlots saved = owner.getData(type);
+        ModAttachments.RitualSlots saved = ModAttachments.get(owner, ritual);
         if (saved == null) {
             LOG.debug("[AngelDemonMenu] No saved slots in attachment for ritual={}", ritual);
             return;

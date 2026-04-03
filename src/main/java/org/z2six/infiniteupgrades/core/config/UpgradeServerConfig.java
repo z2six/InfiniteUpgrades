@@ -4,8 +4,8 @@ package org.z2six.infiniteupgrades.core.config;
 import com.mojang.logging.LogUtils;
 import net.minecraft.ChatFormatting;
 import net.minecraft.resources.ResourceLocation;
-import net.neoforged.fml.event.config.ModConfigEvent;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
+import net.minecraftforge.fml.event.config.ModConfigEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.sections.AttributesConfigSpec;
 import org.z2six.infiniteupgrades.core.config.sections.ChanceConfigSpec;
@@ -38,7 +38,7 @@ public final class UpgradeServerConfig {
     public enum StepType { PERCENT, ADDITIVE }
 
     // ---- SPEC ----
-    private static final ModConfigSpec.Builder B = new ModConfigSpec.Builder();
+    private static final ForgeConfigSpec.Builder B = new ForgeConfigSpec.Builder();
 
     // Section specs
     private static GeneralConfigSpec    GENERAL_SPEC;
@@ -49,7 +49,7 @@ public final class UpgradeServerConfig {
     private static SoulsConfigSpec      SOULS_SPEC;
     private static TuningConfigSpec     TUNING_SPEC;   // base step + bonuses + FINAL MULTIPLIERS
 
-    public static final ModConfigSpec SPEC;
+    public static final ForgeConfigSpec SPEC;
 
     static {
         GENERAL_SPEC    = GeneralConfigSpec.define(B);

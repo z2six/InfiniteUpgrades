@@ -2,10 +2,10 @@
 package org.z2six.infiniteupgrades.feature.infusion.logic;
 
 import com.mojang.logging.LogUtils;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.feature.infusion.client.ProgressPhases; // <-- NEW: reuse same math
 import org.z2six.infiniteupgrades.core.net.ModNet;
@@ -17,7 +17,8 @@ public final class InfuseTimers {
     private InfuseTimers() {}
 
     @SubscribeEvent
-    public static void onLevelTick(ServerTickEvent.Post evt) {
+    public static void onLevelTick(TickEvent.ServerTickEvent evt) {
+        if (evt.phase != TickEvent.Phase.END) return;
         var server = evt.getServer();
         if (server == null) return;
 

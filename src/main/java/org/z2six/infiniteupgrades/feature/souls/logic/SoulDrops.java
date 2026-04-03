@@ -56,7 +56,7 @@ public final class SoulDrops {
     }
 
     // Registered as a listener: NeoForge.EVENT_BUS.addListener(SoulDrops::onLivingDrops);
-    public static void onLivingDrops(net.neoforged.neoforge.event.entity.living.LivingDropsEvent evt) {
+    public static void onLivingDrops(net.minecraftforge.event.entity.living.LivingDropsEvent evt) {
         try {
             final LivingEntity victim = evt.getEntity();
             final Level lvl = victim.level();

@@ -2,11 +2,6 @@
 package org.z2six.infiniteupgrades.feature.infusion.net;
 
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.codec.ByteBufCodecs;
-import net.minecraft.network.codec.StreamCodec;
-import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
-import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 
 /**
  * Authoritative snapshot of the current pending infusion state.
@@ -19,24 +14,24 @@ public record PendingStateS2C(
         int durationTicks,
         boolean outcomeKnown,
         boolean willSucceed
-) implements CustomPacketPayload {
+) {
+    public static void encode(PendingStateS2C msg, FriendlyByteBuf buf) {
+        buf.writeVarInt(msg.containerId);
+        buf.writeBoolean(msg.active);
+        buf.writeVarLong(msg.endGameTime);
+        buf.writeVarInt(msg.durationTicks);
+        buf.writeBoolean(msg.outcomeKnown);
+        buf.writeBoolean(msg.willSucceed);
+    }
 
-    public static final Type<PendingStateS2C> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(Infiniteupgrades.MODID, "pending_state_s2c"));
-
-    public static final StreamCodec<FriendlyByteBuf, PendingStateS2C> STREAM_CODEC =
-            StreamCodec.composite(
-                    ByteBufCodecs.VAR_INT,  PendingStateS2C::containerId,
-                    ByteBufCodecs.BOOL,     PendingStateS2C::active,
-                    ByteBufCodecs.VAR_LONG, PendingStateS2C::endGameTime,
-                    ByteBufCodecs.VAR_INT,  PendingStateS2C::durationTicks,
-                    ByteBufCodecs.BOOL,     PendingStateS2C::outcomeKnown,
-                    ByteBufCodecs.BOOL,     PendingStateS2C::willSucceed,
-                    PendingStateS2C::new
-            );
-
-    @Override
-    public Type<? extends CustomPacketPayload> type() {
-        return TYPE;
+    public static PendingStateS2C decode(FriendlyByteBuf buf) {
+        return new PendingStateS2C(
+                buf.readVarInt(),
+                buf.readBoolean(),
+                buf.readVarLong(),
+                buf.readVarInt(),
+                buf.readBoolean(),
+                buf.readBoolean()
+        );
     }
 }

@@ -1,7 +1,7 @@
 // File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/RitualsConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 
 /**
  * File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/RitualsConfigSpec.java
@@ -16,13 +16,13 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  */
 public final class RitualsConfigSpec {
 
-    public final ModConfigSpec.DoubleValue angelStepMultiplier;
-    public final ModConfigSpec.DoubleValue demonStepMultiplier;
+    public final ForgeConfigSpec.DoubleValue angelStepMultiplier;
+    public final ForgeConfigSpec.DoubleValue demonStepMultiplier;
 
     /** Server-authoritative delay (seconds) between clicking Infuse and getting the result. */
-    public final ModConfigSpec.DoubleValue infuseDelaySeconds;
+    public final ForgeConfigSpec.DoubleValue infuseDelaySeconds;
 
-    private RitualsConfigSpec(ModConfigSpec.Builder B) {
+    private RitualsConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("rituals");
 
         angelStepMultiplier = B.comment(
@@ -43,7 +43,7 @@ public final class RitualsConfigSpec {
         B.pop();
     }
 
-    public static RitualsConfigSpec define(ModConfigSpec.Builder B) {
+    public static RitualsConfigSpec define(ForgeConfigSpec.Builder B) {
         return new RitualsConfigSpec(B);
     }
 

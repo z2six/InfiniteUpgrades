@@ -56,7 +56,7 @@ public final class PendingStore {
     private PendingStore() {}
 
     private static HolderLookup.Provider provider(ServerPlayer sp) {
-        return sp.registryAccess();
+        return sp.serverLevel().registryAccess();
     }
 
     private static DynamicOps<Tag> ops(HolderLookup.Provider provider) {
@@ -215,16 +215,12 @@ public final class PendingStore {
                 LOG.warn("[PendingStore] finalize: result is empty; leaving slot2 empty");
             }
 
-            var type = (snap.ritual() == RitualType.ANGEL)
-                    ? ModAttachments.ANGEL_RITUAL_SLOTS.get()
-                    : ModAttachments.DEMON_RITUAL_SLOTS.get();
-
-            ModAttachments.RitualSlots cur = sp.getData(type);
+            ModAttachments.RitualSlots cur = ModAttachments.get(sp, snap.ritual());
             ItemStack s0 = cur != null ? cur.s0().copy() : ItemStack.EMPTY;
             ItemStack s1 = cur != null ? cur.s1().copy() : ItemStack.EMPTY;
 
             ModAttachments.RitualSlots updated = new ModAttachments.RitualSlots(s0, s1, result);
-            sp.setData(type, updated);
+            ModAttachments.set(sp, snap.ritual(), updated);
 
             clear(sp);
 

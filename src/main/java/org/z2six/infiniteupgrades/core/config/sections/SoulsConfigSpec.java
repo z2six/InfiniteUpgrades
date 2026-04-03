@@ -3,7 +3,7 @@
 package org.z2six.infiniteupgrades.core.config.sections;
 
 import net.minecraft.resources.ResourceLocation;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -19,39 +19,39 @@ import static org.z2six.infiniteupgrades.core.config.ConfigParsing.*;
 public final class SoulsConfigSpec {
 
     // Basic toggles
-    public final ModConfigSpec.BooleanValue enabled;
-    public final ModConfigSpec.DoubleValue  dropChance;
+    public final ForgeConfigSpec.BooleanValue enabled;
+    public final ForgeConfigSpec.DoubleValue  dropChance;
 
-    public final ModConfigSpec.EnumValue<SoulsDropModel> dropModel;
+    public final ForgeConfigSpec.EnumValue<SoulsDropModel> dropModel;
 
     // RATIO model knobs
-    public final ModConfigSpec.DoubleValue  hpToSoulsRatio;
-    public final ModConfigSpec.IntValue     minUnitsForDrop;
-    public final ModConfigSpec.ConfigValue<List<? extends String>> tierUnitsKV;
+    public final ForgeConfigSpec.DoubleValue  hpToSoulsRatio;
+    public final ForgeConfigSpec.IntValue     minUnitsForDrop;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> tierUnitsKV;
 
     // HP_THRESHOLDS model knobs
-    public final ModConfigSpec.ConfigValue<List<? extends String>> tierMinHeartsKV;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> tierMinHeartsKV;
 
-    public final ModConfigSpec.IntValue     lifetimeSeconds; // 0 = permanent (new behavior)
-    public final ModConfigSpec.BooleanValue allowPvP;
-    public final ModConfigSpec.ConfigValue<List<? extends String>> whitelistIds;
-    public final ModConfigSpec.ConfigValue<List<? extends String>> blacklistIds;
+    public final ForgeConfigSpec.IntValue     lifetimeSeconds; // 0 = permanent (new behavior)
+    public final ForgeConfigSpec.BooleanValue allowPvP;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> whitelistIds;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> blacklistIds;
 
     // Cosmetic/utility
-    public final ModConfigSpec.BooleanValue spawnLights;
-    public final ModConfigSpec.IntValue     lightRadiusBlocks;
+    public final ForgeConfigSpec.BooleanValue spawnLights;
+    public final ForgeConfigSpec.IntValue     lightRadiusBlocks;
 
     // Collection
-    public final ModConfigSpec.IntValue     collectRangeBlocks;
+    public final ForgeConfigSpec.IntValue     collectRangeBlocks;
 
     // ---------------- NEW: Upgrade soul-cost fields ----------------
-    public final ModConfigSpec.DoubleValue  upgradeBaseCost;
-    public final ModConfigSpec.DoubleValue  upgradeExponentialBase;
-    public final ModConfigSpec.DoubleValue  upgradeExponentialScale;
-    public final ModConfigSpec.ConfigValue<List<? extends String>> upgradeCostOverridesKV;
+    public final ForgeConfigSpec.DoubleValue  upgradeBaseCost;
+    public final ForgeConfigSpec.DoubleValue  upgradeExponentialBase;
+    public final ForgeConfigSpec.DoubleValue  upgradeExponentialScale;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> upgradeCostOverridesKV;
     // ----------------------------------------------------------------
 
-    private SoulsConfigSpec(ModConfigSpec.Builder B) {
+    private SoulsConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("souls");
 
         enabled     = B.comment(
@@ -160,7 +160,7 @@ public final class SoulsConfigSpec {
         B.pop();
     }
 
-    public static SoulsConfigSpec define(ModConfigSpec.Builder B) {
+    public static SoulsConfigSpec define(ForgeConfigSpec.Builder B) {
         return new SoulsConfigSpec(B);
     }
 

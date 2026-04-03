@@ -16,11 +16,11 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-import net.minecraft.world.item.component.CustomData;
-import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
+import net.minecraftforge.event.entity.player.ItemTooltipEvent;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 import org.z2six.infiniteupgrades.feature.infusion.logic.ToolSpeedUtil;
 
 import java.text.DecimalFormat;
@@ -216,10 +216,7 @@ public final class TooltipHooks {
     private static Map<String, Double> readTotalsPercents(ItemStack stack) {
         Map<String, Double> out = new LinkedHashMap<>();
         try {
-            if (!stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) return out;
-            final CustomData cd = stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-            if (cd == CustomData.EMPTY) return out;
-            final var up = cd.copyTag().getCompound(ROOT_UPGRADE_TAG);
+            final var up = StackTagUtil.getTagCopy(stack).getCompound(ROOT_UPGRADE_TAG);
             final var totals = up.getCompound(TOTALS_TAG);
             for (String key : totals.getAllKeys()) {
                 out.put(key, totals.getCompound(key).getDouble("sumPercent")); // fraction
@@ -232,10 +229,7 @@ public final class TooltipHooks {
     private static Map<String, Double> aggregatePercentsFromHistory(ItemStack stack) {
         Map<String, Double> out = new LinkedHashMap<>();
         try {
-            if (!stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) return out;
-            final CustomData cd = stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-            if (cd == CustomData.EMPTY) return out;
-            final var up = cd.copyTag().getCompound(ROOT_UPGRADE_TAG);
+            final var up = StackTagUtil.getTagCopy(stack).getCompound(ROOT_UPGRADE_TAG);
             if (!up.contains(HISTORY_TAG, net.minecraft.nbt.Tag.TAG_LIST)) return out;
             final var history = up.getList(HISTORY_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND);
             for (int i = 0; i < history.size(); i++) {
@@ -256,18 +250,13 @@ public final class TooltipHooks {
     private static int readLevelFromTagOrZero(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return 0;
         try {
-            if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
-                final CustomData cd = stack.getOrDefault(net.minecraft.core.component.DataComponents.CUSTOM_DATA, CustomData.EMPTY);
-                if (cd != CustomData.EMPTY) {
-                    final var root = cd.copyTag();
-                    if (root.contains(ROOT_UPGRADE_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)) {
-                        final var up = root.getCompound(ROOT_UPGRADE_TAG);
-                        if (up.contains(LEVEL_KEY, net.minecraft.nbt.Tag.TAG_INT)) {
-                            int lvl = up.getInt(LEVEL_KEY);
-                            if (lvl > 0) {
-                                return Mth.clamp(lvl, 0, 100_000);
-                            }
-                        }
+            final var root = StackTagUtil.getTagCopy(stack);
+            if (root.contains(ROOT_UPGRADE_TAG, net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+                final var up = root.getCompound(ROOT_UPGRADE_TAG);
+                if (up.contains(LEVEL_KEY, net.minecraft.nbt.Tag.TAG_INT)) {
+                    int lvl = up.getInt(LEVEL_KEY);
+                    if (lvl > 0) {
+                        return Mth.clamp(lvl, 0, 100_000);
                     }
                 }
             }

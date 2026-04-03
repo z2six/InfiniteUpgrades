@@ -2,8 +2,8 @@
 package org.z2six.infiniteupgrades.core.config;
 
 import com.mojang.logging.LogUtils;
-import net.neoforged.fml.event.config.ModConfigEvent;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
+import net.minecraftforge.fml.event.config.ModConfigEvent;
 import org.slf4j.Logger;
 
 import static org.z2six.infiniteupgrades.core.config.ConfigParsing.clamp01;
@@ -20,7 +20,7 @@ import static org.z2six.infiniteupgrades.core.config.ConfigParsing.clamp01;
 public final class UpgradeClientConfig {
     private static final Logger LOG = LogUtils.getLogger();
 
-    private static final ModConfigSpec.Builder B = new ModConfigSpec.Builder();
+    private static final ForgeConfigSpec.Builder B = new ForgeConfigSpec.Builder();
 
     // ---- Sections ----
     static {
@@ -37,10 +37,10 @@ public final class UpgradeClientConfig {
         B.pop(); // client
     }
 
-    public static final ModConfigSpec.DoubleValue SUCCESS_SFX_VOLUME;
-    public static final ModConfigSpec.DoubleValue FAIL_SFX_VOLUME;
+    public static final ForgeConfigSpec.DoubleValue SUCCESS_SFX_VOLUME;
+    public static final ForgeConfigSpec.DoubleValue FAIL_SFX_VOLUME;
 
-    public static final ModConfigSpec SPEC = B.build();
+    public static final ForgeConfigSpec SPEC = B.build();
 
     private UpgradeClientConfig() {}
 

@@ -6,20 +6,17 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.component.CustomData;
-import net.minecraft.world.item.component.ItemAttributeModifiers;
-import net.minecraft.world.item.component.ItemAttributeModifiers.Entry;
-import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import org.slf4j.Logger;
+import org.z2six.infiniteupgrades.core.util.ItemAttributeHelper;
+import org.z2six.infiniteupgrades.core.util.StackTagUtil;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig;
 import org.z2six.infiniteupgrades.feature.infusion.logic.RitualType;
@@ -358,14 +355,10 @@ public final class DetailsPanelView {
 
         Set<ResourceLocation> presentAttrs = new java.util.LinkedHashSet<>();
         try {
-            ItemAttributeModifiers cur = s.getAttributeModifiers();
-            for (Entry e : cur.modifiers()) {
-                var id = idOf(e.attribute());
-                if (id != null) presentAttrs.add(id);
-            }
-            ItemAttributeModifiers def = s.getItem().getDefaultAttributeModifiers(s);
-            for (Entry e : def.modifiers()) {
-                var id = idOf(e.attribute());
+            for (ItemAttributeHelper.Entry e : ItemAttributeHelper.mergeUnique(
+                    ItemAttributeHelper.getCurrentEntries(s),
+                    ItemAttributeHelper.getDefaultEntries(s))) {
+                var id = e.attributeId();
                 if (id != null) presentAttrs.add(id);
             }
         } catch (Throwable ignored) {}
@@ -440,14 +433,10 @@ public final class DetailsPanelView {
     private void buildPossibleUpgradesForItem(ItemStack s, RitualType ritual, int width) {
         Set<ResourceLocation> present = new LinkedHashSet<>();
         try {
-            ItemAttributeModifiers cur = s.getAttributeModifiers();
-            for (Entry e : cur.modifiers()) {
-                var id = idOf(e.attribute());
-                if (id != null) present.add(id);
-            }
-            ItemAttributeModifiers def = s.getItem().getDefaultAttributeModifiers(s);
-            for (Entry e : def.modifiers()) {
-                var id = idOf(e.attribute());
+            for (ItemAttributeHelper.Entry e : ItemAttributeHelper.mergeUnique(
+                    ItemAttributeHelper.getCurrentEntries(s),
+                    ItemAttributeHelper.getDefaultEntries(s))) {
+                var id = e.attributeId();
                 if (id != null) present.add(id);
             }
         } catch (Throwable ignored) {}
@@ -756,9 +745,7 @@ public final class DetailsPanelView {
     private Map<String, TotalsInfo> readTotalsWithCounts(ItemStack s) {
         Map<String, TotalsInfo> out = new LinkedHashMap<>();
         try {
-            CustomData cd = s.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
-            if (cd == null) return out;
-            var root = cd.copyTag().getCompound("iu_upgrade");
+            var root = StackTagUtil.getTagCopy(s).getCompound("iu_upgrade");
             var totals = root.getCompound("totals");
             for (String key : totals.getAllKeys()) {
                 var a = totals.getCompound(key);
@@ -780,9 +767,7 @@ public final class DetailsPanelView {
     private List<HistEvent> readHistory(ItemStack s) {
         List<HistEvent> out = new ArrayList<>();
         try {
-            CustomData cd = s.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
-            if (cd == null) return out;
-            var root = cd.copyTag().getCompound("iu_upgrade");
+            var root = StackTagUtil.getTagCopy(s).getCompound("iu_upgrade");
             var hist = root.getList("history", net.minecraft.nbt.Tag.TAG_COMPOUND);
             for (int i = 0; i < hist.size(); i++) {
                 var ev = hist.getCompound(i);
@@ -797,14 +782,6 @@ public final class DetailsPanelView {
         return out;
     }
 
-    private static ResourceLocation idOf(Holder<Attribute> holder) {
-        try {
-            return holder != null ? holder.unwrapKey().map(ResourceKey::location).orElse(null) : null;
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
     private static String pct1(double frac) { return PCT1.format(frac * 100.0) + "%"; }
 
     private boolean isInfusionLocked() {
@@ -816,9 +793,7 @@ public final class DetailsPanelView {
     private static boolean isPreview(ItemStack stack) {
         try {
             if (stack.isEmpty()) return false;
-            CustomData cd = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
-            if (cd == null) return false;
-            return cd.copyTag().getBoolean("iu_preview");
+            return StackTagUtil.getTagCopy(stack).getBoolean("iu_preview");
         } catch (Throwable ignored) {
             return false;
         }

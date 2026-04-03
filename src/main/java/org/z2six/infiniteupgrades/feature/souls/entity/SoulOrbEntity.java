@@ -139,9 +139,9 @@ public class SoulOrbEntity extends Entity {
     }
 
     @Override
-    protected void defineSynchedData(SynchedEntityData.Builder builder) {
-        builder.define(DATA_TIER, 0);
-        builder.define(DATA_UNITS, 0);
+    protected void defineSynchedData() {
+        this.entityData.define(DATA_TIER, 0);
+        this.entityData.define(DATA_UNITS, 0);
     }
 
     @Override
@@ -446,11 +446,5 @@ public class SoulOrbEntity extends Entity {
     public void setLightAnchor(BlockPos pos) {
         this.lightAnchor = pos == null ? null : pos.immutable();
         this.lightCleared = false;
-    }
-
-    /** Called when entity is fully removed from the world (e.g., chunk unload, world quit). */
-    @Override
-    public void onRemovedFromLevel() {
-        super.onRemovedFromLevel();
     }
 }

@@ -3,7 +3,7 @@ package org.z2six.infiniteupgrades.core.config.sections;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.resources.ResourceLocation;
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 import org.slf4j.Logger;
 
 import java.util.*;
@@ -33,13 +33,13 @@ import java.util.*;
 public final class TuningConfigSpec {
     private static final Logger LOG = LogUtils.getLogger();
 
-    public final ModConfigSpec.DoubleValue stepPercent;
-    public final ModConfigSpec.ConfigValue<List<? extends String>> bonusStepsKV;
+    public final ForgeConfigSpec.DoubleValue stepPercent;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> bonusStepsKV;
 
     // NEW: final per-stat multipliers (id=double), default 1.0 if missing
-    public final ModConfigSpec.ConfigValue<List<? extends String>> finalMultipliersKV;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> finalMultipliersKV;
 
-    private TuningConfigSpec(ModConfigSpec.Builder B) {
+    private TuningConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("tuning");
 
         stepPercent = B.comment(
@@ -67,7 +67,7 @@ public final class TuningConfigSpec {
         B.pop();
     }
 
-    public static TuningConfigSpec define(ModConfigSpec.Builder B) {
+    public static TuningConfigSpec define(ForgeConfigSpec.Builder B) {
         return new TuningConfigSpec(B);
     }
 

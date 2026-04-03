@@ -1,7 +1,7 @@
 // File: src/main/java/org/z2six/infiniteupgrades/core/config/sections/ChanceConfigSpec.java
 package org.z2six.infiniteupgrades.core.config.sections;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 import org.z2six.infiniteupgrades.core.config.UpgradeServerConfig.ChanceModelType;
 
 import java.util.List;
@@ -18,14 +18,14 @@ import static org.z2six.infiniteupgrades.core.config.ConfigParsing.parseLevelDou
  */
 public final class ChanceConfigSpec {
 
-    public final ModConfigSpec.EnumValue<ChanceModelType> model;
-    public final ModConfigSpec.DoubleValue startChance;
-    public final ModConfigSpec.DoubleValue decrementPerLevel;   // FLAT model
-    public final ModConfigSpec.DoubleValue minChance;           // FLAT clamp
-    public final ModConfigSpec.DoubleValue exponentialBase;     // EXP model
-    public final ModConfigSpec.ConfigValue<List<? extends String>> overridesKV;
+    public final ForgeConfigSpec.EnumValue<ChanceModelType> model;
+    public final ForgeConfigSpec.DoubleValue startChance;
+    public final ForgeConfigSpec.DoubleValue decrementPerLevel;   // FLAT model
+    public final ForgeConfigSpec.DoubleValue minChance;           // FLAT clamp
+    public final ForgeConfigSpec.DoubleValue exponentialBase;     // EXP model
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> overridesKV;
 
-    private ChanceConfigSpec(ModConfigSpec.Builder B) {
+    private ChanceConfigSpec(ForgeConfigSpec.Builder B) {
         B.push("chance");
 
         model = B.comment(
@@ -67,7 +67,7 @@ public final class ChanceConfigSpec {
         B.pop();
     }
 
-    public static ChanceConfigSpec define(ModConfigSpec.Builder B) {
+    public static ChanceConfigSpec define(ForgeConfigSpec.Builder B) {
         return new ChanceConfigSpec(B);
     }
 

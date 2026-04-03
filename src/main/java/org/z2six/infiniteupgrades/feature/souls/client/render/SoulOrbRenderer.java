@@ -188,13 +188,13 @@ public final class SoulOrbRenderer extends EntityRenderer<SoulOrbEntity> {
                             int r, int g, int b, int a,
                             int light,
                             float nx, float ny, float nz) {
-        vc.addVertex(pose, x, y, z)
-                .setColor(r, g, b, a)
-                .setUv(u, v)
-                .setOverlay(OverlayTexture.NO_OVERLAY)
-                .setLight(light)
-                .setNormal(nx, ny, nz);
-        // no endVertex() on 1.21.x
+        vc.vertex(pose.pose(), x, y, z)
+                .color(r, g, b, a)
+                .uv(u, v)
+                .overlayCoords(OverlayTexture.NO_OVERLAY)
+                .uv2(light)
+                .normal(pose.normal(), nx, ny, nz)
+                .endVertex();
     }
 
     private static float[] colorForTier(SoulOrbEntity.Tier tier) {

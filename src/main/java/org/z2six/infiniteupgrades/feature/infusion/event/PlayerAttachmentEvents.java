@@ -2,13 +2,13 @@
 package org.z2six.infiniteupgrades.feature.infusion.event;
 
 import com.mojang.logging.LogUtils;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.minecraft.world.item.ItemStack;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
 import org.z2six.infiniteupgrades.core.Infiniteupgrades;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
-import net.neoforged.fml.common.EventBusSubscriber;
+import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
 
 /**
  * Ensures our ritual slot attachments persist through player clone (death/respawn).
@@ -26,29 +26,10 @@ public final class PlayerAttachmentEvents {
             var oldP = event.getOriginal();
             var newP = event.getEntity();
 
-            // ANGEL
-            var angelType = ModAttachments.ANGEL_RITUAL_SLOTS.get();
-            var angelOld  = oldP.getData(angelType);
-            var angelNew  = (angelOld == null)
-                    ? new ModAttachments.RitualSlots(ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY)
-                    : new ModAttachments.RitualSlots(
-                    angelOld.s0().copy(),
-                    angelOld.s1().copy(),
-                    angelOld.s2().copy()
-            );
-            newP.setData(angelType, angelNew);
+            ModAttachments.copy(oldP, newP);
 
-            // DEMON
-            var demonType = ModAttachments.DEMON_RITUAL_SLOTS.get();
-            var demonOld  = oldP.getData(demonType);
-            var demonNew  = (demonOld == null)
-                    ? new ModAttachments.RitualSlots(ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY)
-                    : new ModAttachments.RitualSlots(
-                    demonOld.s0().copy(),
-                    demonOld.s1().copy(),
-                    demonOld.s2().copy()
-            );
-            newP.setData(demonType, demonNew);
+            var angelNew = ModAttachments.get(newP, org.z2six.infiniteupgrades.feature.infusion.logic.RitualType.ANGEL);
+            var demonNew = ModAttachments.get(newP, org.z2six.infiniteupgrades.feature.infusion.logic.RitualType.DEMON);
 
             LOG.debug("[PlayerAttachmentEvents] Copied ritual attachments to clone (wasDeath={}): angel={}, demon={}",
                     event.isWasDeath(), notEmpty(angelNew), notEmpty(demonNew));
