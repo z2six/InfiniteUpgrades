@@ -275,6 +275,199 @@ public final class UpgradeService {
 
     public static record Result(ItemStack upgraded, boolean success, int newLevel) {}
 
+    public static record RewriteResult(ItemStack rewritten, boolean changed, int rewrittenBatches, int rewrittenEvents) {}
+
+    /**
+     * Rebuilds an upgraded stack from its canonical history, but recalculates every successful step from the
+     * current server config. This lets server operators retroactively rebalance already-upgraded items.
+     *
+     * Scope/assumptions:
+     * - Requires canonical iu_upgrade.history entries (batchId/attribute/change/levelBefore/levelAfter).
+     * - Keeps the same batch order and touched attributes.
+     * - Downgrade batches are reconstructed as exact inverses of the rewritten success batches.
+     * - Ritual inference is heuristic for one-attribute success batches because legacy history does not store ritual.
+     */
+    public static RewriteResult rewriteToCurrentConfig(ItemStack original) {
+        try {
+            if (original == null || original.isEmpty()) {
+                return new RewriteResult(ItemStack.EMPTY, false, 0, 0);
+            }
+
+            ItemStack copy = original.copy();
+            CustomData cd = copy.get(DataComponents.CUSTOM_DATA);
+            if (cd == null) return new RewriteResult(copy, false, 0, 0);
+
+            CompoundTag root = cd.copyTag();
+            if (!root.contains(ROOT, Tag.TAG_COMPOUND)) return new RewriteResult(copy, false, 0, 0);
+
+            CompoundTag up = root.getCompound(ROOT);
+            ListTag history = up.getList(KEY_HISTORY, Tag.TAG_COMPOUND);
+            if (history.isEmpty()) return new RewriteResult(copy, false, 0, 0);
+
+            List<HistoricalBatch> originalBatches = readCanonicalBatches(history);
+            if (originalBatches.isEmpty()) return new RewriteResult(copy, false, 0, 0);
+
+            Snapshot snap = UpgradeServerConfig.snapshot();
+
+            Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> rules = new LinkedHashMap<>();
+            for (var r : snap.attributes) {
+                if (r.enabled) rules.put(r.id, r);
+            }
+
+            List<Entry> working = mergeListsUnique(
+                    new ArrayList<>(safeModifiers(copy).modifiers()),
+                    new ArrayList<>(copy.getItem().getDefaultAttributeModifiers(copy).modifiers())
+            );
+
+            List<ResourceLocation> presentEnabled = presentRuleBackedIds(working, rules.keySet());
+            ensureBases(copy, working, presentEnabled);
+
+            boolean miningTool = false;
+            try {
+                miningTool = ToolSpeedUtil.isMiningTool(copy);
+            } catch (Throwable ignored) {}
+
+            int currentCandidateCount = presentEnabled.size() + (miningTool ? 1 : 0);
+
+            Set<ResourceLocation> managed = new LinkedHashSet<>(rules.keySet());
+            for (HistoricalBatch batch : originalBatches) {
+                for (HistoricalEntry entry : batch.entries()) {
+                    if (entry.id() != null && !BLOCK_SPEED_ID.equals(entry.id())) {
+                        managed.add(entry.id());
+                    }
+                }
+            }
+
+            Deque<RewrittenSuccessBatch> appliedSuccesses = new ArrayDeque<>();
+            List<HistoricalEventOut> rewrittenEvents = new ArrayList<>();
+
+            for (HistoricalBatch batch : originalBatches) {
+                if (batch.change() > 0) {
+                    RitualType ritual = inferHistoricalRitual(batch, currentCandidateCount);
+                    List<AttrStep> rewrittenSteps = new ArrayList<>();
+                    for (HistoricalEntry entry : batch.entries()) {
+                        if (entry.id() == null) continue;
+                        double signedPercent = computeConfiguredSignedStep(batch.levelBefore(), entry.id(), ritual, rules, snap);
+                        rewrittenSteps.add(new AttrStep(entry.id(), signedPercent, "pct_step", entry.op()));
+                        rewrittenEvents.add(new HistoricalEventOut(
+                                batch.time(),
+                                batch.batchId(),
+                                entry.id(),
+                                entry.op(),
+                                signedPercent,
+                                "pct_step",
+                                batch.levelBefore(),
+                                batch.levelAfter(),
+                                +1
+                        ));
+                    }
+                    appliedSuccesses.push(new RewrittenSuccessBatch(
+                            batch.batchId(),
+                            batch.time(),
+                            batch.levelBefore(),
+                            batch.levelAfter(),
+                            rewrittenSteps
+                    ));
+                    continue;
+                }
+
+                if (batch.change() < 0) {
+                    RewrittenSuccessBatch reverted = appliedSuccesses.poll();
+                    if (reverted != null) {
+                        for (AttrStep step : reverted.steps()) {
+                            rewrittenEvents.add(new HistoricalEventOut(
+                                    batch.time(),
+                                    batch.batchId(),
+                                    step.id,
+                                    step.op,
+                                    -step.signedPercent,
+                                    "downgrade",
+                                    batch.levelBefore(),
+                                    batch.levelAfter(),
+                                    -1
+                            ));
+                        }
+                    } else {
+                        for (HistoricalEntry entry : batch.entries()) {
+                            if (entry.id() == null) continue;
+                            rewrittenEvents.add(new HistoricalEventOut(
+                                    batch.time(),
+                                    batch.batchId(),
+                                    entry.id(),
+                                    entry.op(),
+                                    0.0,
+                                    "downgrade",
+                                    batch.levelBefore(),
+                                    batch.levelAfter(),
+                                    -1
+                            ));
+                        }
+                    }
+                }
+            }
+
+            CompoundTag newTotals = new CompoundTag();
+            ListTag newHistory = new ListTag();
+            for (HistoricalEventOut ev : rewrittenEvents) {
+                String attrKey = ev.id().toString();
+
+                CompoundTag totalsEntry = newTotals.getCompound(attrKey);
+                double sumPct = totalsEntry.getDouble("sumPercent") + ev.stepPercent();
+                int count = totalsEntry.getInt("count") + (ev.change() > 0 ? 1 : -1);
+                if (count <= 0) {
+                    count = 0;
+                    sumPct = 0.0;
+                }
+                totalsEntry.putDouble("sumPercent", sumPct);
+                totalsEntry.putInt("count", count);
+                totalsEntry.putDouble("lastPercent", ev.stepPercent());
+                newTotals.put(attrKey, totalsEntry);
+
+                CompoundTag out = new CompoundTag();
+                out.putLong(H_TIME, ev.time());
+                out.putLong(H_BATCH, ev.batchId());
+                out.putString(H_ATTR, attrKey);
+                out.putString(H_OP, ev.op());
+                out.putDouble(H_OLD, 0.0);
+                out.putDouble(H_DELTA, 0.0);
+                out.putDouble(H_NEW, 0.0);
+                out.putDouble(H_STEP_P, ev.stepPercent());
+                out.putString(H_RULE, ev.ruleId());
+                out.putInt(H_LBEF, ev.levelBefore());
+                out.putInt(H_LAFT, ev.levelAfter());
+                out.putInt(H_CHANGE, ev.change());
+                newHistory.add(out);
+            }
+
+            int finalLevel = Math.max(0, appliedSuccesses.size());
+
+            CustomData rewritten = copy.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).update(tag -> {
+                CompoundTag upgrade = tag.getCompound(ROOT);
+                upgrade.putInt(KEY_LEVEL, finalLevel);
+                upgrade.put(KEY_TOTALS, newTotals);
+                upgrade.put(KEY_HISTORY, newHistory);
+                tag.put(ROOT, upgrade);
+            });
+            copy.set(DataComponents.CUSTOM_DATA, rewritten);
+
+            List<Entry> recomputed = recomputeAllFromTotals(copy, working, managed);
+            copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
+
+            double blockSpeedTotal = 0.0;
+            CompoundTag blockSpeedTotals = newTotals.getCompound(BLOCK_SPEED_ID.toString());
+            if (!blockSpeedTotals.isEmpty()) {
+                blockSpeedTotal = blockSpeedTotals.getDouble("sumPercent");
+            }
+            ToolSpeedUtil.setBonus(copy, blockSpeedTotal);
+
+            boolean changed = !ItemStack.matches(original, copy);
+            return new RewriteResult(copy, changed, originalBatches.size(), rewrittenEvents.size());
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] rewriteToCurrentConfig failed: {}", t.toString());
+            return new RewriteResult(original == null ? ItemStack.EMPTY : original.copy(), false, 0, 0);
+        }
+    }
+
     // -------------------- Exact rollback of last level (batch-aware) --------------------
 
     public static ItemStack downgradeLastLevel(ItemStack original) {
@@ -557,6 +750,18 @@ public final class UpgradeService {
     // -------------------- Small structs --------------------
 
     private record AttrStep(ResourceLocation id, double signedPercent, String ruleId, String op) {}
+    private record HistoricalEntry(ResourceLocation id, String op) {}
+    private record HistoricalBatch(long batchId, long time, int change, int levelBefore, int levelAfter, List<HistoricalEntry> entries) {}
+    private record HistoricalEventOut(long time,
+                                      long batchId,
+                                      ResourceLocation id,
+                                      String op,
+                                      double stepPercent,
+                                      String ruleId,
+                                      int levelBefore,
+                                      int levelAfter,
+                                      int change) {}
+    private record RewrittenSuccessBatch(long batchId, long time, int levelBefore, int levelAfter, List<AttrStep> steps) {}
 
     // -------------------- Utility bits (mostly kept from your original) --------------------
 
@@ -706,5 +911,77 @@ public final class UpgradeService {
     // --- tiny util
     private static String fmt(double x) {
         return String.format(java.util.Locale.ROOT, "%.5f", x);
+    }
+
+    private static List<HistoricalBatch> readCanonicalBatches(ListTag history) {
+        Map<Long, List<CompoundTag>> grouped = new LinkedHashMap<>();
+        for (int i = 0; i < history.size(); i++) {
+            CompoundTag ev = history.getCompound(i);
+            if (!ev.contains(H_BATCH, Tag.TAG_ANY_NUMERIC)) continue;
+            if (!ev.contains(H_ATTR, Tag.TAG_STRING)) continue;
+            long batchId = ev.getLong(H_BATCH);
+            grouped.computeIfAbsent(batchId, ignored -> new ArrayList<>()).add(ev.copy());
+        }
+
+        List<HistoricalBatch> out = new ArrayList<>();
+        for (var entry : grouped.entrySet()) {
+            List<CompoundTag> events = entry.getValue();
+            if (events.isEmpty()) continue;
+
+            CompoundTag first = events.getFirst();
+            long time = first.getLong(H_TIME);
+            int change = first.getInt(H_CHANGE);
+            int levelBefore = first.getInt(H_LBEF);
+            int levelAfter = first.getInt(H_LAFT);
+
+            List<HistoricalEntry> attrs = new ArrayList<>();
+            for (CompoundTag ev : events) {
+                ResourceLocation id = ResourceLocation.tryParse(ev.getString(H_ATTR));
+                if (id == null) continue;
+                String op = ev.getString(H_OP);
+                attrs.add(new HistoricalEntry(id, (op == null || op.isBlank()) ? "ADD_VALUE" : op));
+            }
+
+            if (!attrs.isEmpty()) {
+                out.add(new HistoricalBatch(entry.getKey(), time, change, levelBefore, levelAfter, attrs));
+            }
+        }
+        return out;
+    }
+
+    private static RitualType inferHistoricalRitual(HistoricalBatch batch, int currentCandidateCount) {
+        int touched = batch.entries().size();
+        if (touched <= 0) return RitualType.DEMON;
+        if (currentCandidateCount > 0 && touched >= currentCandidateCount) return RitualType.ANGEL;
+        return touched > 1 ? RitualType.ANGEL : RitualType.DEMON;
+    }
+
+    private static double computeConfiguredSignedStep(int currentLevel,
+                                                      ResourceLocation id,
+                                                      RitualType ritual,
+                                                      Map<ResourceLocation, UpgradeServerConfig.AttributeRuleConfig> rules,
+                                                      Snapshot snap) {
+        if (id == null) return 0.0;
+
+        double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
+        ritualMult = Math.max(0.0, ritualMult);
+
+        if (BLOCK_SPEED_ID.equals(id)) {
+            double step = Math.max(0.0, snap.percentBonusForLevelUp(currentLevel));
+            step *= ritualMult;
+            step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+            return step;
+        }
+
+        var rule = rules.get(id);
+        if (rule == null) return 0.0;
+
+        double baseStep = rule.perLevelOverrides.getOrDefault(currentLevel, rule.defaultStep);
+        double step = Math.max(0.0, baseStep);
+        step *= ritualMult;
+        step *= Math.max(0.0, snap.finalMultiplier(id));
+        if (step <= 0.0) return 0.0;
+
+        return (rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step;
     }
 }

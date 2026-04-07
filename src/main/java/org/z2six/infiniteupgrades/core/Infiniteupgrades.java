@@ -28,6 +28,7 @@ import org.z2six.infiniteupgrades.core.registry.ModEntityTypes;
 import org.z2six.infiniteupgrades.core.registry.ModMenus;
 import org.z2six.infiniteupgrades.core.registry.ModSounds;
 import org.z2six.infiniteupgrades.feature.infusion.attachment.ModAttachments;
+import org.z2six.infiniteupgrades.feature.infusion.commands.UpgradeRewriteCommands;
 import org.z2six.infiniteupgrades.feature.infusion.client.InfuseClientTicker;
 import org.z2six.infiniteupgrades.feature.infusion.client.screen.AngelDemonScreen;
 import org.z2six.infiniteupgrades.feature.reputation.commands.RepCommands;
@@ -83,6 +84,7 @@ public class Infiniteupgrades {
             NeoForge.EVENT_BUS.addListener(RepEvents::onPlayerClone);
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.InfuseTimers::onLevelTick);
             NeoForge.EVENT_BUS.addListener(RepCommands::register);
+            NeoForge.EVENT_BUS.addListener(UpgradeRewriteCommands::register);
 
             // NEW: multiply mining speed by our "block_speed" bonus
             NeoForge.EVENT_BUS.addListener(org.z2six.infiniteupgrades.feature.infusion.logic.BreakSpeedHooks::onBreakSpeed);
