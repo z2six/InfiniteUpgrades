@@ -338,7 +338,8 @@ public final class DetailsPanelView {
             addWrapped(line, ChatFormatting.WHITE, width);
         }
         try {
-            if (ToolSpeedUtil.isMiningTool(s) && !tot.containsKey(BLOCK_SPEED_KEY)) {
+            String miningKey = ToolSpeedUtil.miningSpeedStatId().toString();
+            if (ToolSpeedUtil.isMiningTool(s) && !tot.containsKey(miningKey)) {
                 double bonus = ToolSpeedUtil.getBonus(s);
                 if (Math.abs(bonus) > 1.0e-6) {
                     String pct = ToolSpeedUtil.formatPercentNoSign(bonus);
@@ -377,23 +378,25 @@ public final class DetailsPanelView {
 
         List<Double> steps = new ArrayList<>();
         try {
-            for (var rule : snap.attributes) {
-                if (!rule.enabled) continue;
-                if (!presentAttrs.contains(rule.id)) continue;
+            if (!ToolSpeedUtil.isMiningTool(s)) {
+                for (var rule : snap.attributes) {
+                    if (!rule.enabled) continue;
+                    if (!presentAttrs.contains(rule.id)) continue;
 
-                double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
-                double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
+                    double base = rule.perLevelOverrides.getOrDefault(level, rule.defaultStep);
+                    double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                step *= Math.max(0.0, snap.finalMultiplier(rule.id));
-                if (step > 0.0) steps.add(step);
+                    step *= Math.max(0.0, snap.finalMultiplier(rule.id));
+                    if (step > 0.0) steps.add(step);
+                }
             }
 
             if (ToolSpeedUtil.isMiningTool(s)) {
                 double base = snap.percentBonusForLevelUp(level);
                 double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
-                step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+                ResourceLocation miningSpeedId = ToolSpeedUtil.miningSpeedStatId();
+                step *= Math.max(0.0, snap.finalMultiplier(miningSpeedId));
 
                 if (step > 0.0) steps.add(step);
             }
@@ -459,6 +462,7 @@ public final class DetailsPanelView {
 
         int shown = 0;
 
+        if (!ToolSpeedUtil.isMiningTool(s)) {
         for (var rule : snap.attributes) {
             if (!rule.enabled) continue;
             if (!present.contains(rule.id)) continue;
@@ -478,18 +482,22 @@ public final class DetailsPanelView {
             addWrapped(line, ChatFormatting.WHITE, width);
             shown++;
         }
+        }
 
         try {
             if (ToolSpeedUtil.isMiningTool(s)) {
                 double base = snap.percentBonusForLevelUp(level);
                 double step = Math.max(0.0, base) * Math.max(0.0, ritualMult);
 
-                ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
-                double finalMult = Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+                ResourceLocation miningSpeedId = ToolSpeedUtil.miningSpeedStatId();
+                double finalMult = Math.max(0.0, snap.finalMultiplier(miningSpeedId));
                 step *= finalMult;
 
                 if (step > 0.0) {
-                    String line = BULLET + "Block Speed  (+" + PCT1.format(step * 100.0) + "% per upgrade)";
+                    String display = ToolSpeedUtil.usesApothicMiningSpeed()
+                            ? resolveAttrDisplayName(miningSpeedId.toString())
+                            : "Block Speed";
+                    String line = BULLET + display + "  (+" + PCT1.format(step * 100.0) + "% per upgrade)";
                     addWrapped(line, ChatFormatting.WHITE, width);
                     shown++;
                     LOG.debug("[DetailsPanelView] PossibleUpgrades: Block Speed step={} (level={}, ritualMult={}, finalMult={})",

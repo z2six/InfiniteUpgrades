@@ -570,6 +570,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             double factor = 1.0 + step;
 
             ItemStack preview = in.copy();
+            boolean miningTool = isMiningTool(in);
 
             ItemAttributeModifiers cur = preview.getAttributeModifiers();
             ItemAttributeModifiers.Builder builder = ItemAttributeModifiers.builder();
@@ -577,7 +578,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             for (Entry e : cur.modifiers()) {
                 Holder<Attribute> attr = e.attribute();
                 AttributeModifier mod = e.modifier();
-                if (!isCombatAttr(attr) || mod == null) {
+                if (miningTool || !isCombatAttr(attr) || mod == null) {
                     builder.add(attr, mod, e.slot());
                     continue;
                 }
@@ -591,7 +592,7 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
                 for (Entry e : def.modifiers()) {
                     Holder<Attribute> attr = e.attribute();
                     AttributeModifier mod = e.modifier();
-                    if (!isCombatAttr(attr) || mod == null) {
+                    if (miningTool || !isCombatAttr(attr) || mod == null) {
                         builder.add(attr, mod, e.slot());
                     } else {
                         double scaled = mod.amount() * factor;
@@ -603,14 +604,15 @@ public final class AngelDemonMenu extends AbstractContainerMenu {
             preview.set(DataComponents.ATTRIBUTE_MODIFIERS, builder.build());
 
             try {
-                if (isMiningTool(in)) {
+                if (miningTool) {
                     double curBonus = ToolSpeedUtil.getBonus(in);       // fraction
-                    double nextBonus = Math.max(0.0, curBonus + step);  // same per-level step you show elsewhere
+                    double miningStep = step * Math.max(0.0, snap.finalMultiplier(ToolSpeedUtil.miningSpeedStatId()));
+                    double nextBonus = Math.max(0.0, curBonus + miningStep);
                     ToolSpeedUtil.setBonus(preview, nextBonus);
                     LOG.debug("[AngelDemonMenu] Preview tool_speed_bonus next={} (cur={} step={}) for {}",
                             String.format(java.util.Locale.ROOT, "%.5f", nextBonus),
                             String.format(java.util.Locale.ROOT, "%.5f", curBonus),
-                            String.format(java.util.Locale.ROOT, "%.5f", step),
+                            String.format(java.util.Locale.ROOT, "%.5f", miningStep),
                             in.getItem());
                 }
             } catch (Throwable t) {

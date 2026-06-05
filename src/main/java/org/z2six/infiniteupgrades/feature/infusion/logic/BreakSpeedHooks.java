@@ -24,6 +24,7 @@ public final class BreakSpeedHooks {
     public static void onBreakSpeed(PlayerEvent.BreakSpeed e) {
         try {
             if (e == null || e.getEntity() == null) return;
+            if (ToolSpeedUtil.usesApothicMiningSpeed()) return;
 
             final ItemStack held = e.getEntity().getMainHandItem();
             if (held.isEmpty()) return;

@@ -67,7 +67,7 @@ public final class UpgradeService {
     private static final String H_LAFT   = "levelAfter";
     private static final String H_CHANGE = "change";       // +1 success, -1 downgrade
 
-    // Synthetic attribute id for our custom mining stat (not a vanilla attribute)
+    // Legacy/custom synthetic attribute id for our mining stat when Apothic Attributes is not present.
     private static final ResourceLocation BLOCK_SPEED_ID = ResourceLocation.fromNamespaceAndPath("infiniteupgrades", "block_speed");
 
     // -------------------- Chance (base model only; rep handled in menu) --------------------
@@ -179,17 +179,15 @@ public final class UpgradeService {
         // Present & rule-backed attributes
         List<ResourceLocation> present = presentRuleBackedIds(working, rules.keySet());
 
-        // ---- Make Block Speed a first-class candidate (if the item is a mining tool)
+        // Mining tools are upgraded as tools, not weapons: only mining speed is eligible.
         boolean isMiningTool = false;
         try { isMiningTool = ToolSpeedUtil.isMiningTool(copy); } catch (Throwable ignored) {}
-        List<ResourceLocation> candidates = new ArrayList<>(present);
-        if (isMiningTool) {
-            candidates.add(BLOCK_SPEED_ID); // pseudo-attribute; will be handled specially
-        }
+        ResourceLocation miningSpeedId = ToolSpeedUtil.miningSpeedStatId();
+        List<ResourceLocation> candidates = UpgradeCandidateSelector.candidatesForItem(present, isMiningTool, miningSpeedId);
         if (candidates.isEmpty()) return new Result(copy, false, currentLevel);
 
-        // Ensure bases / totals structures exist (for vanilla attributes only; block_speed has no base)
-        ensureBases(copy, working, present);
+        // Ensure bases / totals structures exist for vanilla attributes only.
+        ensureBases(copy, working, isMiningTool ? List.of() : present);
 
         // We'll update totals/history atomically (single batch)
         long batchId = System.nanoTime();
@@ -198,7 +196,7 @@ public final class UpgradeService {
         double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
 
         // Determine which attributes are touched this attempt:
-        // - ANGEL -> all candidates (vanilla present attrs + block_speed if mining)
+        // - ANGEL -> all candidates
         // - DEMON -> exactly one picked from candidates (weighted by rule weight if present; default 1)
         List<ResourceLocation> touched;
         if (ritual == RitualType.ANGEL) {
@@ -210,29 +208,18 @@ public final class UpgradeService {
         // For each touched attribute, compute the signed step and apply it to totals/history.
         List<AttrStep> steps = new ArrayList<>();
         for (ResourceLocation id : touched) {
-            if (id.equals(BLOCK_SPEED_ID)) {
-                // Custom per-level step for block speed comes from your percentBonusForLevelUp model
+            if (isMiningSpeedId(id)) {
+                // Mining speed uses the global per-level percent model.
                 double baseStep = snap.percentBonusForLevelUp(currentLevel); // fraction
                 double step = Math.max(0.0, baseStep) * Math.max(0.0, ritualMult);
 
-                // >>> FINAL MULTIPLIER (Block Speed) <<<
-                step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+                // >>> FINAL MULTIPLIER (Mining Speed) <<<
+                step *= Math.max(0.0, snap.finalMultiplier(id));
 
                 if (step <= 0.0) continue;
 
-                // Apply to the item NBT (authoritative stat)
-                try {
-                    double cur = ToolSpeedUtil.getBonus(copy);
-                    double next = cur + step;
-                    ToolSpeedUtil.setBonus(copy, next);
-                    LOG.debug("[UpgradeService] BlockSpeed touched by {}: old={} new={} step={} (finalMult={})",
-                            ritual, fmt(cur), fmt(next), fmt(step), fmt(snap.finalMultiplier(BLOCK_SPEED_ID)));
-                } catch (Throwable t) {
-                    LOG.error("[UpgradeService] tool_speed_bonus apply failed: {}", t.toString());
-                }
-
                 // Record a canonical step so it appears in Totals & Recent History
-                steps.add(new AttrStep(BLOCK_SPEED_ID, /*signedPercent=*/ step, "pct_step", "ADD_VALUE"));
+                steps.add(new AttrStep(id, /*signedPercent=*/ step, "pct_step", "ADD_VALUE"));
                 continue;
             }
 
@@ -265,6 +252,15 @@ public final class UpgradeService {
         List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
         copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
 
+        try {
+            double miningTotal = readMiningSpeedTotal(copy);
+            if (isMiningTool || Math.abs(miningTotal) > 1.0e-12) {
+                ToolSpeedUtil.setBonus(copy, miningTotal);
+            }
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] mining speed apply failed: {}", t.toString());
+        }
+
         // NOTE: we no longer touch CUSTOM_NAME here; the item name is owned by other systems (e.g. Apotheosis).
         return new Result(copy, true, newLevel);
     }
@@ -276,6 +272,45 @@ public final class UpgradeService {
     public static record Result(ItemStack upgraded, boolean success, int newLevel) {}
 
     public static record RewriteResult(ItemStack rewritten, boolean changed, int rewrittenBatches, int rewrittenEvents) {}
+
+    public static record ResetResult(ItemStack reset, boolean changed, int restoredAttributes, boolean removedUpgradeData) {}
+
+    public static ResetResult resetUpgradeChanges(ItemStack original) {
+        try {
+            if (original == null || original.isEmpty()) {
+                return new ResetResult(ItemStack.EMPTY, false, 0, false);
+            }
+
+            ItemStack copy = original.copy();
+            CustomData cd = copy.get(DataComponents.CUSTOM_DATA);
+            if (cd == null) {
+                return new ResetResult(copy, false, 0, false);
+            }
+
+            CompoundTag root = cd.copyTag();
+            if (!root.contains(ROOT, Tag.TAG_COMPOUND)) {
+                return new ResetResult(copy, false, 0, false);
+            }
+
+            CompoundTag up = root.getCompound(ROOT);
+            CompoundTag bases = up.getCompound(KEY_BASES);
+            int restored = restoreAttributeBases(copy, bases);
+
+            ToolSpeedUtil.clearUpgradeBonus(copy);
+
+            CustomData cleaned = copy.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).update(tag -> {
+                tag.remove(ROOT);
+                tag.remove("iu_tool_speed_bonus");
+            });
+            copy.set(DataComponents.CUSTOM_DATA, cleaned);
+
+            boolean changed = !ItemStack.matches(original, copy);
+            return new ResetResult(copy, changed, restored, true);
+        } catch (Throwable t) {
+            LOG.error("[UpgradeService] resetUpgradeChanges failed: {}", t.toString());
+            return new ResetResult(original == null ? ItemStack.EMPTY : original.copy(), false, 0, false);
+        }
+    }
 
     /**
      * Rebuilds an upgraded stack from its canonical history, but recalculates every successful step from the
@@ -332,7 +367,7 @@ public final class UpgradeService {
             Set<ResourceLocation> managed = new LinkedHashSet<>(rules.keySet());
             for (HistoricalBatch batch : originalBatches) {
                 for (HistoricalEntry entry : batch.entries()) {
-                    if (entry.id() != null && !BLOCK_SPEED_ID.equals(entry.id())) {
+                    if (entry.id() != null && !isMiningSpeedId(entry.id())) {
                         managed.add(entry.id());
                     }
                 }
@@ -453,12 +488,14 @@ public final class UpgradeService {
             List<Entry> recomputed = recomputeAllFromTotals(copy, working, managed);
             copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
 
-            double blockSpeedTotal = 0.0;
-            CompoundTag blockSpeedTotals = newTotals.getCompound(BLOCK_SPEED_ID.toString());
-            if (!blockSpeedTotals.isEmpty()) {
-                blockSpeedTotal = blockSpeedTotals.getDouble("sumPercent");
+            double miningSpeedTotal = 0.0;
+            for (String key : newTotals.getAllKeys()) {
+                ResourceLocation id = ResourceLocation.tryParse(key);
+                if (isMiningSpeedId(id)) {
+                    miningSpeedTotal += newTotals.getCompound(key).getDouble("sumPercent");
+                }
             }
-            ToolSpeedUtil.setBonus(copy, blockSpeedTotal);
+            ToolSpeedUtil.setBonus(copy, miningSpeedTotal);
 
             boolean changed = !ItemStack.matches(original, copy);
             return new RewriteResult(copy, changed, originalBatches.size(), rewrittenEvents.size());
@@ -514,13 +551,13 @@ public final class UpgradeService {
 
                     // If that batch touched block_speed, mirror the inverse on the custom stat too
                     // by reconstructing the net delta from inverse steps.
-                    double deltaBlock = 0.0;
+                    double deltaMining = 0.0;
                     for (AttrStep st : inverse) {
-                        if (BLOCK_SPEED_ID.equals(st.id)) deltaBlock += st.signedPercent;
+                        if (isMiningSpeedId(st.id)) deltaMining += st.signedPercent;
                     }
-                    if (Math.abs(deltaBlock) > 1e-12) {
+                    if (Math.abs(deltaMining) > 1e-12) {
                         double cur = ToolSpeedUtil.getBonus(copy);
-                        ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
+                        ToolSpeedUtil.setBonus(copy, cur + deltaMining);
                     }
 
                     // Level is already updated by appendStepsAndUpdateTotals; we no longer rewrite CUSTOM_NAME.
@@ -554,13 +591,13 @@ public final class UpgradeService {
                     List<Entry> recomputed = recomputeAllFromTotals(copy, working, rules.keySet());
                     copy.set(DataComponents.ATTRIBUTE_MODIFIERS, fromEntries(recomputed));
 
-                    double deltaBlock = 0.0;
+                    double deltaMining = 0.0;
                     for (AttrStep st : inverse) {
-                        if (BLOCK_SPEED_ID.equals(st.id)) deltaBlock += st.signedPercent;
+                        if (isMiningSpeedId(st.id)) deltaMining += st.signedPercent;
                     }
-                    if (Math.abs(deltaBlock) > 1e-12) {
+                    if (Math.abs(deltaMining) > 1e-12) {
                         double cur = ToolSpeedUtil.getBonus(copy);
-                        ToolSpeedUtil.setBonus(copy, cur + deltaBlock);
+                        ToolSpeedUtil.setBonus(copy, cur + deltaMining);
                     }
 
                     // Level is already updated; no name rewrite.
@@ -720,6 +757,35 @@ public final class UpgradeService {
         return b.build().modifiers();
     }
 
+    private static int restoreAttributeBases(ItemStack stack, CompoundTag bases) {
+        if (stack == null || stack.isEmpty() || bases == null || bases.isEmpty()) return 0;
+
+        int restored = 0;
+        ItemAttributeModifiers current = safeModifiers(stack);
+        ItemAttributeModifiers.Builder b = ItemAttributeModifiers.builder();
+        for (Entry e : current.modifiers()) {
+            Holder<Attribute> a = e.attribute();
+            AttributeModifier m = e.modifier();
+            if (a == null || m == null) {
+                b.add(a, m, e.slot());
+                continue;
+            }
+
+            ResourceLocation id = idOf(a);
+            String key = id == null ? "" : id.toString();
+            if (!key.isEmpty() && bases.contains(key, Tag.TAG_ANY_NUMERIC)) {
+                double base = bases.getDouble(key);
+                if (Math.abs(m.amount() - base) > 1.0e-12) restored++;
+                b.add(a, new AttributeModifier(m.id(), base, m.operation()), e.slot());
+                continue;
+            }
+
+            b.add(a, m, e.slot());
+        }
+        stack.set(DataComponents.ATTRIBUTE_MODIFIERS, b.build());
+        return restored;
+    }
+
     private static Map<String, Double> readBases(ItemStack stack) {
         Map<String, Double> out = new LinkedHashMap<>();
         try {
@@ -744,6 +810,15 @@ public final class UpgradeService {
                 out.put(k, a.getDouble("sumPercent"));
             }
         } catch (Throwable ignored) {}
+        return out;
+    }
+
+    private static double readMiningSpeedTotal(ItemStack stack) {
+        double out = 0.0;
+        for (var entry : readTotalsPercents(stack).entrySet()) {
+            ResourceLocation id = ResourceLocation.tryParse(entry.getKey());
+            if (isMiningSpeedId(id)) out += entry.getValue();
+        }
         return out;
     }
 
@@ -966,10 +1041,10 @@ public final class UpgradeService {
         double ritualMult = (ritual == RitualType.ANGEL) ? snap.angelStepMult : snap.demonStepMult;
         ritualMult = Math.max(0.0, ritualMult);
 
-        if (BLOCK_SPEED_ID.equals(id)) {
+        if (isMiningSpeedId(id)) {
             double step = Math.max(0.0, snap.percentBonusForLevelUp(currentLevel));
             step *= ritualMult;
-            step *= Math.max(0.0, snap.finalMultiplier(BLOCK_SPEED_ID));
+            step *= Math.max(0.0, snap.finalMultiplier(id));
             return step;
         }
 
@@ -983,5 +1058,9 @@ public final class UpgradeService {
         if (step <= 0.0) return 0.0;
 
         return (rule.direction == UpgradeServerConfig.Direction.INCREASE) ? step : -step;
+    }
+
+    private static boolean isMiningSpeedId(@Nullable ResourceLocation id) {
+        return id != null && (BLOCK_SPEED_ID.equals(id) || ToolSpeedUtil.miningSpeedStatId().equals(id));
     }
 }

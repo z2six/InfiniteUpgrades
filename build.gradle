@@ -81,6 +81,13 @@ dependencies {
     implementation "software.bernie.geckolib:geckolib-neoforge-1.21.1:4.8.2"
     // ^ If you prefer property-driven versions:
     // implementation "software.bernie.geckolib:geckolib-neoforge-${minecraft_version}:${geckolib_version}"
+
+    testImplementation platform("org.junit:junit-bom:5.10.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+}
+
+test {
+    useJUnitPlatform()
 }
 
 // Generate mod metadata (unchanged)

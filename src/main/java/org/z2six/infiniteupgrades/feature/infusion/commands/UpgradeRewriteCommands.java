@@ -40,10 +40,47 @@ public final class UpgradeRewriteCommands {
         var root = LiteralArgumentBuilder.<CommandSourceStack>literal("iu")
                 .requires(src -> src.hasPermission(REQUIRED_LEVEL))
                 .then(Commands.literal("rewriteupgrades")
-                        .executes(ctx -> rewriteLoadedItems(ctx.getSource())));
+                        .executes(ctx -> rewriteLoadedItems(ctx.getSource())))
+                .then(Commands.literal("resetitem")
+                        .executes(ctx -> resetHeldItem(ctx.getSource())));
 
         evt.getDispatcher().register(root);
-        LOG.debug("[UpgradeRewriteCommands] Registered /iu rewriteupgrades (requires OP level >= {})", REQUIRED_LEVEL);
+        LOG.debug("[UpgradeRewriteCommands] Registered /iu rewriteupgrades and /iu resetitem (requires OP level >= {})", REQUIRED_LEVEL);
+    }
+
+    private static int resetHeldItem(CommandSourceStack source) {
+        ServerPlayer player;
+        try {
+            player = source.getPlayerOrException();
+        } catch (Throwable t) {
+            source.sendFailure(Component.literal("/iu resetitem must be run by a player holding an item."));
+            return 0;
+        }
+
+        var original = player.getMainHandItem();
+        if (original == null || original.isEmpty()) {
+            source.sendFailure(Component.literal("Hold the upgraded item in your main hand, then run /iu resetitem."));
+            return 0;
+        }
+
+        var reset = UpgradeService.resetUpgradeChanges(original);
+        if (!reset.removedUpgradeData() || !reset.changed()) {
+            source.sendFailure(Component.literal("Held item has no Infinite Upgrades data to reset."));
+            return 0;
+        }
+
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, reset.reset());
+        player.getInventory().setChanged();
+        player.inventoryMenu.broadcastChanges();
+        player.containerMenu.broadcastChanges();
+
+        String summary = String.format(
+                "Reset Infinite Upgrades data on held item. Restored %d attribute modifier(s); removed upgrade history/totals and IU mining speed data.",
+                reset.restoredAttributes()
+        );
+        source.sendSuccess(() -> Component.literal(summary), true);
+        LOG.info("[UpgradeRewriteCommands] {} Player={} Item={}", summary, player.getGameProfile().getName(), reset.reset().getItem());
+        return 1;
     }
 
     private static int rewriteLoadedItems(CommandSourceStack source) {

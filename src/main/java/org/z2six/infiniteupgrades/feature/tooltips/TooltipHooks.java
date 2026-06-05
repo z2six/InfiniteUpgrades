@@ -196,7 +196,7 @@ public final class TooltipHooks {
         // "Block Speed " in #00A800, then "(+X%)" in aqua so the preview obfuscator hits the numbers in parens.
         try {
             final ItemStack stack = event.getItemStack();
-            if (ToolSpeedUtil.isMiningTool(stack)) {
+            if (ToolSpeedUtil.isMiningTool(stack) && !ToolSpeedUtil.usesApothicMiningSpeed()) {
                 double frac = ToolSpeedUtil.getBonus(stack);
                 if (Math.abs(frac) > 1.0e-6) {
                     String pct = ToolSpeedUtil.formatPercentNoSign(frac); // "15%" etc.
