@@ -89,6 +89,9 @@ public final class TooltipHooks {
                 // 2) Legacy fallback: scan history and aggregate signed stepPercent
                 pctByAttrId.putAll(aggregatePercentsFromHistory(stack));
             }
+            if (ToolSpeedUtil.usesApothicMiningSpeed()) {
+                pctByAttrId.remove(ToolSpeedUtil.miningSpeedStatId().toString());
+            }
             if (pctByAttrId.isEmpty()) {
                 // keep going—custom "Block Speed" and "+N" name suffix may still need to be appended
             } else {

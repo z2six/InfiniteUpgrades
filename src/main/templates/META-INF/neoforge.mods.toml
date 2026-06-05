@@ -20,6 +20,8 @@ modId = "${mod_id}" #mandatory
 version = "${mod_version}" #mandatory
 # Display name in Mods UI
 displayName = "${mod_name}" #mandatory
+# Logo shown in Mods UI
+logoFile = "icon.png" #optional
 # Authors shown in Mods UI
 authors = "${mod_authors}" #optional
 
